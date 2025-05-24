@@ -2,11 +2,29 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>par_project_9</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <version>0.0.1</version>
+  <description>ROSBot Package Pickup and Delivery</description>
   <maintainer email="s39477643@student.rmit.edu.au">rmitaiil</maintainer>
+  <maintainer email="s3958798@student.rmit.edu.au">Thanawat Neamboonnum</maintainer>
   <license>TODO: License declaration</license>
 
+  <!-- ─────────────  runtime deps  ───────────── -->
+  <!-- Core ROS 2 / msgs -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <!-- TF broadcaster -->
+  <exec_depend>tf2_ros</exec_depend>
+  <!-- Image ↔︎ OpenCV bridge -->
+  <exec_depend>cv_bridge</exec_depend>
+  <!-- You install OpenCV-contrib with pip, but list it anyway for clarity -->
+  <exec_depend>python3-opencv</exec_depend>
+  
+  <!-- ─────────────  test deps  ───────────── -->
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
