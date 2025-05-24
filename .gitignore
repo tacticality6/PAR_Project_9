@@ -1,0 +1,7 @@
+!/.gitignore
+/humble_workspace/build/
+/humble_workspace/install/
+/humble_workspace/log/
+/humble_workspace/src/build/
+/humble_workspace/src/install/
+/humble_workspace/src/log/

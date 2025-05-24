@@ -4,28 +4,41 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import cv2, numpy as np
 from cv_bridge import CvBridge
+<<<<<<< HEAD
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+=======
+from sensor_msgs.msg import Image, CameraInfo
+>>>>>>> 4fac40f (feat: implement aruco detect)
 from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 
+<<<<<<< HEAD
 from geometry_msgs.msg import PointStamped
 
+=======
+>>>>>>> 4fac40f (feat: implement aruco detect)
 class ArucoDetector(Node):
 
     def __init__(self):
         super().__init__("aruco_detector")
 
         # ---------- params ----------
+<<<<<<< HEAD
         self.DEBUG_MODE = True # set to True to enable debug overlay
         
         # which camera topics to listen to
         self.declare_parameter("image_topic", "/oak/rgb/image_raw/compressed")
+=======
+        # which camera topics to listen to
+        self.declare_parameter("image_topic", "/oak/rgb/image_raw")
+>>>>>>> 4fac40f (feat: implement aruco detect)
         self.declare_parameter("info_topic", "/oak/rgb/camera_info")
         # aruco marker parameters
         self.declare_parameter("marker_size_m", 0.06) # 6 cm
         self.declare_parameter("aruco_dict", "DICT_4X4_50")
         self.declare_parameter("publish_tf", True)
+<<<<<<< HEAD
         
         # **immediately read them back and log them**
         image_topic   = self.get_parameter("image_topic").value
@@ -40,6 +53,8 @@ class ArucoDetector(Node):
         self.get_logger().info(f"→ aruco_dict:    {aruco_dict}")
         self.get_logger().info(f"→ publish_tf:    {publish_tf}")
         self.get_logger().info(f"→ DEBUG_MODE:" + (" ON" if self.DEBUG_MODE else " OFF"))
+=======
+>>>>>>> 4fac40f (feat: implement aruco detect)
 
         # ---------- internal ----------
         self._dict = cv2.aruco.getPredefinedDictionary(
@@ -50,6 +65,7 @@ class ArucoDetector(Node):
 
         # pubs/subs
         self._tfbr = TransformBroadcaster(self)
+<<<<<<< HEAD
         self._pub = self.create_publisher(Detection2DArray, "aruco_detections", 10)
         self._overlay_pub = self.create_publisher(Image,  "aruco/overlay", 10)
 
@@ -67,6 +83,19 @@ class ArucoDetector(Node):
             "marker_position", 
             10)
         
+=======
+        self._pub = self.create_publisher(Detection2DArray,
+                                           "aruco_detections", 10)
+
+        self.create_subscription(CameraInfo,
+                                 self.get_parameter("info_topic").value,
+                                 self.info_cb, 10)
+
+        self.create_subscription(Image,
+                                 self.get_parameter("image_topic").value,
+                                 self.image_cb, qos_profile_sensor_data)
+
+>>>>>>> 4fac40f (feat: implement aruco detect)
         self.get_logger().info("\n 👻 💀 ☠️ 👽 👾 🤖 🦾 🦿 ArucoDetector ready to roll! 🤮 🤢 🤧 🤒 🤕 😭 😤 😵")
 
 
@@ -77,6 +106,7 @@ class ArucoDetector(Node):
             d = np.array(msg.d)
             self._camera_matrix, self._dist_coeffs = k, d
             self.get_logger().info("Camera received")
+<<<<<<< HEAD
             
     def image_cb(self, msg: CompressedImage):
         if self._camera_matrix is None:
@@ -102,6 +132,17 @@ class ArucoDetector(Node):
     
         if ids is None:
             # self.get_logger().info("\n 👻 no overlay published")
+=======
+
+    def image_cb(self, msg: Image):
+        if self._camera_matrix is None:
+            return  # wait for calibration
+
+        img = self._bridge.imgmsg_to_cv2(msg, "bgr8")
+        corners, ids, _ = cv2.aruco.detectMarkers(img, self._dict)
+
+        if ids is None:
+>>>>>>> 4fac40f (feat: implement aruco detect)
             return # nothing this frame
 
         # pose
@@ -117,6 +158,7 @@ class ArucoDetector(Node):
         for i, marker_id in enumerate(ids.flatten()):
             ## 1. Detection message
             det = Detection2D()
+<<<<<<< HEAD
             self.get_logger().info(f"Markers ID -> {marker_id} detected")
             
             oh = ObjectHypothesisWithPose()
@@ -133,6 +175,17 @@ class ArucoDetector(Node):
             print(f"Detected marker {marker_id} at {det.bbox.center.position.x:.2f}, {det.bbox.center.position.y:.2f}")
 
             ## 2. TF
+=======
+            det.results.append(ObjectHypothesisWithPose(
+                id=marker_id, score=1.0))           # score dummy =1
+            det.bbox.center.x = np.mean(corners[i][0][:, 0])
+            det.bbox.center.y = np.mean(corners[i][0][:, 1])
+            det.bbox.center.theta = 0.0
+            det.bbox.size_x = det.bbox.size_y = 1.0 # pixels, ignored
+            det_array.detections.append(det)
+
+            ## 2. TF (optional)
+>>>>>>> 4fac40f (feat: implement aruco detect)
             if self.get_parameter("publish_tf").value:
                 t = TransformStamped()
                 t.header = msg.header
@@ -152,6 +205,7 @@ class ArucoDetector(Node):
                 t.transform.rotation.z, t.transform.rotation.w = qx,qy,qz,qw
                 self._tfbr.sendTransform(t)
 
+<<<<<<< HEAD
 
             # Publish marker position
             marker_pos = PointStamped()
@@ -198,6 +252,8 @@ class ArucoDetector(Node):
         # ─── end draw debug overlay ──────────────────────────────────────────────
 
         # publish the detection array
+=======
+>>>>>>> 4fac40f (feat: implement aruco detect)
         self._pub.publish(det_array)
 
 def main():
@@ -208,4 +264,8 @@ def main():
     rclpy.shutdown()
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     main()
+=======
+    main()
+>>>>>>> 4fac40f (feat: implement aruco detect)
