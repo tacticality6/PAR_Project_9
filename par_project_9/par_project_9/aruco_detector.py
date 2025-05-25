@@ -6,6 +6,7 @@ import cv2, numpy as np
 from cv_bridge import CvBridge
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 =======
 from sensor_msgs.msg import Image, CameraInfo
@@ -13,6 +14,9 @@ from sensor_msgs.msg import Image, CameraInfo
 =======
 from sensor_msgs.msg import CameraInfo, CompressedImage
 >>>>>>> ae945db (bug)
+=======
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
 from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
@@ -29,11 +33,16 @@ class ArucoDetector(Node):
 
         # ---------- params ----------
 <<<<<<< HEAD
+<<<<<<< HEAD
         self.DEBUG_MODE = True # set to True to enable debug overlay
         
         # which camera topics to listen to
         self.declare_parameter("image_topic", "/oak/rgb/image_raw/compressed")
 =======
+=======
+        self.DEBUG_MODE = True # set to True to enable debug overlay
+        
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
         # which camera topics to listen to
 <<<<<<< HEAD
         self.declare_parameter("image_topic", "/oak/rgb/image_raw")
@@ -64,11 +73,15 @@ class ArucoDetector(Node):
         self.get_logger().info(f"→ aruco_dict:    {aruco_dict}")
         self.get_logger().info(f"→ publish_tf:    {publish_tf}")
 <<<<<<< HEAD
+<<<<<<< HEAD
         self.get_logger().info(f"→ DEBUG_MODE:" + (" ON" if self.DEBUG_MODE else " OFF"))
 =======
 >>>>>>> 4fac40f (feat: implement aruco detect)
 =======
 >>>>>>> ae945db (bug)
+=======
+        self.get_logger().info(f"→ DEBUG_MODE:" + (" ON" if self.DEBUG_MODE else " OFF"))
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
 
         # ---------- internal ----------
         self._dict = cv2.aruco.getPredefinedDictionary(
@@ -103,18 +116,28 @@ class ArucoDetector(Node):
                                            "aruco_detections", 10)
 =======
         self._pub = self.create_publisher(Detection2DArray, "aruco_detections", 10)
+<<<<<<< HEAD
         self._overlay_pub = self.create_publisher(CompressedImage,  "aruco/overlay", 10)
 >>>>>>> ae945db (bug)
+=======
+        self._overlay_pub = self.create_publisher(Image,  "aruco/overlay", 10)
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
 
         self.create_subscription(CameraInfo,
-                                 self.get_parameter("info_topic").value,
-                                 self.info_cb, 10)
+                                self.get_parameter("info_topic").value,
+                                self.info_cb, 10)
 
         self.create_subscription(CompressedImage,
+<<<<<<< HEAD
                                  self.get_parameter("image_topic").value,
                                  self.image_cb, qos_profile_sensor_data)
 
 >>>>>>> 4fac40f (feat: implement aruco detect)
+=======
+                                self.get_parameter("image_topic").value,
+                                self.image_cb, qos_profile_sensor_data)
+        
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
         self.get_logger().info("\n 👻 💀 ☠️ 👽 👾 🤖 🦾 🦿 ArucoDetector ready to roll! 🤮 🤢 🤧 🤒 🤕 😭 😤 😵")
 
 
@@ -165,25 +188,31 @@ class ArucoDetector(Node):
         # --- decompress JPEG/PNG bytes ---
         np_arr = np.frombuffer(msg.data, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)   # BGR image
+            
         if img is None:
-            self.get_logger().warn("Failed to decode compressed image")
+            self.get_logger().info("Failed to decode compressed image")
             return
         
         # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = cv2.aruco.detectMarkers(img, self._dict)
 
         n = 0 if ids is None else len(ids)
-        self.get_logger().info(f"detectMarkers() -> {n} markersx")
+        if n > 0:
+            self.get_logger().info(f"detectMarkers() -> {n} markers")
         
         if n and (self.get_clock().now().nanoseconds // 1e9) % 1 == 0:
             self.get_logger().info(f"IDs: {ids.flatten()[:4]} ...")
     
         if ids is None:
 <<<<<<< HEAD
+<<<<<<< HEAD
 >>>>>>> 4fac40f (feat: implement aruco detect)
 =======
             self.get_logger().info("\n 👻 no overlay published")
 >>>>>>> ae945db (bug)
+=======
+            # self.get_logger().info("\n 👻 no overlay published")
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
             return # nothing this frame
 
         # pose
@@ -200,6 +229,9 @@ class ArucoDetector(Node):
             ## 1. Detection message
             det = Detection2D()
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
             self.get_logger().info(f"Markers ID -> {marker_id} detected")
             
             oh = ObjectHypothesisWithPose()
@@ -210,6 +242,7 @@ class ArucoDetector(Node):
             det.bbox.center.position.x = float(np.mean(corners[i][0][:, 0]))
             det.bbox.center.position.y = float(np.mean(corners[i][0][:, 1]))
             # theta is still top‐level on Pose2D
+<<<<<<< HEAD
             det.bbox.center.theta = 0.0
             det.bbox.size_x = det.bbox.size_y = 1.0   # pixels, not used
             det_array.detections.append(det)
@@ -221,12 +254,19 @@ class ArucoDetector(Node):
                 id=marker_id, score=1.0))           # score dummy =1
             det.bbox.center.x = np.mean(corners[i][0][:, 0])
             det.bbox.center.y = np.mean(corners[i][0][:, 1])
+=======
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
             det.bbox.center.theta = 0.0
-            det.bbox.size_x = det.bbox.size_y = 1.0 # pixels, ignored
+            det.bbox.size_x = det.bbox.size_y = 1.0   # pixels, not used
             det_array.detections.append(det)
+            print(f"Detected marker {marker_id} at {det.bbox.center.position.x:.2f}, {det.bbox.center.position.y:.2f}")
 
+<<<<<<< HEAD
             ## 2. TF (optional)
 >>>>>>> 4fac40f (feat: implement aruco detect)
+=======
+            ## 2. TF
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
             if self.get_parameter("publish_tf").value:
                 t = TransformStamped()
                 t.header = msg.header
@@ -247,6 +287,7 @@ class ArucoDetector(Node):
                 self._tfbr.sendTransform(t)
         
         # ─── draw debug overlay ──────────────────────────────────────────────
+<<<<<<< HEAD
         debug_img = img.copy()
         # 1. draw marker borders + ids
         cv2.aruco.drawDetectedMarkers(debug_img, corners, ids)
@@ -275,6 +316,8 @@ class ArucoDetector(Node):
             self.marker_pos_pub.publish(marker_pos)
         
         # ─── draw debug overlay ──────────────────────────────────────────────
+=======
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
         if self.DEBUG_MODE:
             debug_img = img.copy()
             # 1. draw marker borders + ids
@@ -312,8 +355,11 @@ class ArucoDetector(Node):
         # ─── end draw debug overlay ──────────────────────────────────────────────
 
         # publish the detection array
+<<<<<<< HEAD
 =======
 >>>>>>> 4fac40f (feat: implement aruco detect)
+=======
+>>>>>>> 926bf52 (feat: impleent task controller to receive aruco detector and creating marker map)
         self._pub.publish(det_array)
 
 def main():
