@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             f"aruco_detector = {package_name}.aruco_detector:main",
+            f"task_controller = {package_name}.task_controller:main",
         ],
     },
 )

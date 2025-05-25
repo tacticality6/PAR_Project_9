@@ -8,18 +8,7 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # 1) find_object_2d_robot launch
-    find_object_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('aiil_rosbot_demo'),
-                'launch',
-                'find_object_2d_robot.launch.py'
-            )
-        )
-    )
-
-    # 2) ArUco node
+    # ArUco node
     # oak_rgb_camera_optical_frame
     aruco_detector_node = Node(
         package="par_project_9",
@@ -28,7 +17,7 @@ def generate_launch_description():
         parameters=[{
             "image_topic": "/oak/rgb/image_raw/compressed", # compressed!
             "info_topic":  "/oak/rgb/camera_info",
-            "aruco_dict":  "DICT_4X4_250", # ← matched family
+            "aruco_dict":  "DICT_4X4_50", # ← matched family
             "marker_size_m": 0.06,
             "publish_tf":  True
         }]
@@ -37,7 +26,6 @@ def generate_launch_description():
 
     # 3) assemble and return the LaunchDescription
     ld = LaunchDescription()
-    ld.add_action(find_object_launch)
     ld.add_action(aruco_detector_node)
     return ld
 
