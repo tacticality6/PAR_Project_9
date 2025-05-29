@@ -106,6 +106,39 @@ class PointerDetector(Node):
         pointer_pos.point.y = float(largest_blob.getCog().y)
         self.pointer_pub.publish(pointer_pos)
 
+        # Check for touch if markers are present
+        self.check_touch(largest_blob, msg.header)
+
+    def check_touch(self, blob, header):
+        """Verify if pointer is touching any marker"""
+        if not hasattr(self, 'current_markers') or not self.current_markers:
+            return
+
+        pointer_pos = (blob.getCog().x, blob.getCog().y)
+
+        for marker_id, marker_pos in self.current_markers.items():
+            # Calculate distance
+            distance = np.linalg.norm(
+                np.array(pointer_pos) - np.array(marker_pos))
+
+            if self.cam.get_px() == 0:
+                self.get_logger().warn("Camera pixel size (self.cam.get_px()) is zero. Cannot compute metric distance.")
+                continue
+
+            metric_distance = distance / self.cam.get_px()
+
+            if metric_distance < self.get_parameter("touch_threshold").value:
+                self.get_logger().info(f"Touch detected on marker {marker_id} (distance: {metric_distance:.3f}m)")
+
+                # Publish touch event
+                touch_msg = Bool()
+                touch_msg.data = True
+                self.touch_pub.publish(touch_msg)
+
+                id_msg = Int32()
+                id_msg.data = marker_id
+                self.touch_id_pub.publish(id_msg)
+
 
 def main():
     rclpy.init()
