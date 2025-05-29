@@ -7,6 +7,8 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(visp_ros REQUIRED)
+find_package(visp REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -14,6 +16,22 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   
+)
+
+add_executable(pointer_detector src/pointer_detector.py)
+ament_target_dependencies(pointer_detector
+  rclpy
+  sensor_msgs
+  vision_msgs
+  geometry_msgs
+  std_msgs
+  visp_ros
+)
+
+install(TARGETS
+  aruco_detector
+  pointer_detector
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
