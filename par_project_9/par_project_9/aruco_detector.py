@@ -9,6 +9,8 @@ from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithP
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 
+from geometry_msgs.msg import PointStamped
+
 class ArucoDetector(Node):
 
     def __init__(self):
@@ -58,6 +60,12 @@ class ArucoDetector(Node):
         self.create_subscription(CompressedImage,
                                 self.get_parameter("image_topic").value,
                                 self.image_cb, qos_profile_sensor_data)
+        
+        # Add marker position publisher
+        self.marker_pos_pub = self.create_publisher(
+            PointStamped, 
+            "marker_position", 
+            10)
         
         self.get_logger().info("\n 👻 💀 ☠️ 👽 👾 🤖 🦾 🦿 ArucoDetector ready to roll! 🤮 🤢 🤧 🤒 🤕 😭 😤 😵")
 
@@ -143,6 +151,14 @@ class ArucoDetector(Node):
                 t.transform.rotation.x, t.transform.rotation.y, \
                 t.transform.rotation.z, t.transform.rotation.w = qx,qy,qz,qw
                 self._tfbr.sendTransform(t)
+
+
+            # Publish marker position
+            marker_pos = PointStamped()
+            marker_pos.header = msg.header
+            marker_pos.point.x = float(np.mean(corners[i][0][:, 0]))
+            marker_pos.point.y = float(np.mean(corners[i][0][:, 1]))
+            self.marker_pos_pub.publish(marker_pos)
         
         # ─── draw debug overlay ──────────────────────────────────────────────
         if self.DEBUG_MODE:
