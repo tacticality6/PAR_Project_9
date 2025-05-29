@@ -5,6 +5,8 @@ from rclpy.qos import QoSProfile, qos_profile_sensor_data
 import numpy as np
 import visp_ros
 import visp
+from std_msgs.msg import Bool, Int32
+from geometry_msgs.msg import PointStamped
 
 class PointerDetector(Node):
     def __init__(self):
@@ -19,7 +21,7 @@ class PointerDetector(Node):
         # ---------- ViSP Initialization ----------
         self.tracker = visp_ros.BlobTracker()
         self.cam = visp.CameraParameters()
-        # Dummy initialization, will be updated by camera_info_callback
+        # Dummy initialization
         self.cam.initPersProjWithoutDistortion(600, 600, 320, 240)
         self.tracker.setCameraParameters(self.cam)
 
@@ -29,6 +31,14 @@ class PointerDetector(Node):
         self.tracker.setHSVColorRange(
             visp.ColorHSV(lower[0], upper[0], lower[1], upper[1], lower[2], upper[2])
         )
+
+        # ---------- ROS Communications ----------
+        qos = QoSProfile(depth=10)
+
+        # Publishers
+        self.touch_pub = self.create_publisher(Bool, "marker_touched", qos)
+        self.touch_id_pub = self.create_publisher(Int32, "touched_marker_id", qos)
+        self.pointer_pub = self.create_publisher(PointStamped, "pointer_position", qos)
 
         self.get_logger().info("🚦 Pointer Detector node starting up...")
 
