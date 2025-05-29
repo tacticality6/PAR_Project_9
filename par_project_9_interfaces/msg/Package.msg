@@ -1,2 +1,4 @@
 int32 package_id
 int32 destination_id
+
+builtin_interfaces/Time pickup_time
