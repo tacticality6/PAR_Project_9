@@ -85,7 +85,27 @@ class PointerDetector(Node):
         """Placeholder for image processing"""
         if not hasattr(self, 'bridge'):
             self.bridge = CvBridge()
-            
+        
+        # Convert ROS image to OpenCV
+        cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+
+        # Detect pointer using ViSP
+        self.tracker.track(cv_image)
+        blobs = self.tracker.getBlob()
+
+        if not blobs:
+            return
+
+        # Find largest the pointer
+        largest_blob = max(blobs, key=lambda b: b.getArea())
+
+        # Publish pointer position
+        pointer_pos = PointStamped()
+        pointer_pos.header = msg.header
+        pointer_pos.point.x = float(largest_blob.getCog().x)
+        pointer_pos.point.y = float(largest_blob.getCog().y)
+        self.pointer_pub.publish(pointer_pos)
+
 
 def main():
     rclpy.init()
