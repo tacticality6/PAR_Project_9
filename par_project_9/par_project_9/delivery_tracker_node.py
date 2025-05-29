@@ -26,10 +26,10 @@ class DeliveryTrackingNode(Node):
         #publishers, services and callbacks
 
         self.touchedMarkerService = self.create_service(
-            self.touchedMarkerServiceName, 
             MarkerConfirmation, 
+            self.touchedMarkerServiceName, 
             self.touched_marker_callback, 
-            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         )
 
         self.onboardRepeatTimer = self.create_timer(
@@ -125,7 +125,7 @@ class DeliveryTrackingNode(Node):
     def pub_completed_callback(self):
         msg = Deliveries()
         msg.deliveries = self.completed_deliveries
-        self.onboard_pub.publish(msg)
+        self.completed_pub.publish(msg)
 
 
 def main(args=None):
@@ -139,3 +139,6 @@ def main(args=None):
 
     delivery_tracking_node.destroy_node()
     rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()
