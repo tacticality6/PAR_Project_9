@@ -1,0 +1,5 @@
+int32 package_id
+int32 delivery_id
+
+builtin_interfaces/Time time_completed
+builtin_interfaces/Duration trip_time

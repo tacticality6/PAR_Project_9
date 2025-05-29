@@ -13,11 +13,21 @@ find_package(visp REQUIRED)
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/Package.msg"
+  "msg/Packages.msg"
+  "msg/Delivery.msg"
+  "msg/Deliveries.msg"
+  "msg/Marker.msg"
   
+  "srv/MarkerConfirmation.srv"
+
+  DEPENDENCIES builtin_interfaces
 )
 
+<<<<<<< HEAD
 add_executable(pointer_detector src/pointer_detector.py)
 ament_target_dependencies(pointer_detector
   rclpy
@@ -33,6 +43,9 @@ install(TARGETS
   pointer_detector
   DESTINATION lib/${PROJECT_NAME}
 )
+=======
+ament_export_dependencies(rosidl_default_runtime)
+>>>>>>> b67bb77 (Created interfaces for logging and marker interaction)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
