@@ -12,5 +12,10 @@ def generate_launch_description():
             package='par_project_9',
             executable='pointer_detector.py',
             name='pointer_detector'
+        ),
+        Node(
+            package='par_project_9',
+            executable='visual_servoing_node.py',
+            name='visual_servoing_node'
         )
     ])
