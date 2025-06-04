@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Marker.msg"
   
   "srv/MarkerConfirmation.srv"
+<<<<<<< HEAD
 
   DEPENDENCIES builtin_interfaces
 )
@@ -46,6 +47,13 @@ install(TARGETS
 =======
 ament_export_dependencies(rosidl_default_runtime)
 >>>>>>> b67bb77 (Created interfaces for logging and marker interaction)
+=======
+
+  DEPENDENCIES builtin_interfaces
+)
+
+ament_export_dependencies(rosidl_default_runtime)
+>>>>>>> 42bb00957eec8eb231846315678a69ca5002b316
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

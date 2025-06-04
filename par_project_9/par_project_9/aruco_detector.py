@@ -371,7 +371,11 @@ def main():
 
 if __name__ == "__main__":
 <<<<<<< HEAD
+<<<<<<< HEAD
     main()
 =======
     main()
 >>>>>>> 4fac40f (feat: implement aruco detect)
+=======
+    main()
+>>>>>>> 42bb00957eec8eb231846315678a69ca5002b316
