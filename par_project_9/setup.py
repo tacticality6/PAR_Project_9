@@ -26,7 +26,6 @@ setup(
         'console_scripts': [
             f"aruco_detector = {package_name}.aruco_detector:main",
             f"task_controller = {package_name}.task_controller:main",
-            f"visual_servoing_node = {package_name}.visual_servoing_node:main",
         ],
     },
 )
