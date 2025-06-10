@@ -1,144 +1,156 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, qos_profile_sensor_data
+from rclpy.qos import QoSProfile
 import numpy as np
-import visp_ros
-import visp
+import math
 from std_msgs.msg import Bool, Int32
-from geometry_msgs.msg import PointStamped
-from sensor_msgs.msg import Image, CameraInfo
+from geometry_msgs.msg import PointStamped, Point
 from vision_msgs.msg import Detection2DArray
-from cv_bridge import CvBridge
-
+import tf2_ros
+from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
+from rclpy.time import Time
 
 class PointerDetector(Node):
     def __init__(self):
         super().__init__("pointer_detector")
-
+        
         # ---------- Parameters ----------
-        self.declare_parameter("pointer_hsv_lower", [5, 100, 100])
-        self.declare_parameter("pointer_hsv_upper", [15, 255, 255])
         self.declare_parameter("touch_threshold", 0.15)  # meters
-        self.declare_parameter("blob_size_threshold", 500)  # pixels
-
-        # ---------- ViSP Initialization ----------
-        self.tracker = visp_ros.BlobTracker()
-        self.cam = visp.CameraParameters()
-        # Dummy initialization
-        self.cam.initPersProjWithoutDistortion(600, 600, 320, 240)
-        self.tracker.setCameraParameters(self.cam)
-
-        # Set orange color parameters
-        lower = np.array(self.get_parameter("pointer_hsv_lower").value)
-        upper = np.array(self.get_parameter("pointer_hsv_upper").value)
-        self.tracker.setHSVColorRange(
-            visp.ColorHSV(lower[0], upper[0], lower[1], upper[1], lower[2], upper[2])
-        )
-
+        self.declare_parameter("marker_timeout", 5.0)    # seconds
+        self.declare_parameter("pointer_offset_x", 0.0)  # Relative to base_link
+        self.declare_parameter("pointer_offset_y", 0.0)
+        self.declare_parameter("pointer_offset_z", 0.0)
+        self.declare_parameter("camera_frame", "oak_rgb_camera_optical_frame")
+        self.declare_parameter("base_frame", "base_link")
+        
+        # Get parameters
+        self.touch_threshold = self.get_parameter("touch_threshold").value
+        self.marker_timeout = self.get_parameter("marker_timeout").value
+        self.offset_x = self.get_parameter("pointer_offset_x").value
+        self.offset_y = self.get_parameter("pointer_offset_y").value
+        self.offset_z = self.get_parameter("pointer_offset_z").value
+        self.camera_frame = self.get_parameter("camera_frame").value
+        self.base_frame = self.get_parameter("base_frame").value
+        
+        # TF initialization
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        
+        # Marker storage: {marker_id: (x, y, z, last_seen)}
+        self.markers = {}
+        
         # ---------- ROS Communications ----------
         qos = QoSProfile(depth=10)
-
+        
         # Publishers
         self.touch_pub = self.create_publisher(Bool, "marker_touched", qos)
         self.touch_id_pub = self.create_publisher(Int32, "touched_marker_id", qos)
         self.pointer_pub = self.create_publisher(PointStamped, "pointer_position", qos)
-
+        
         # Subscribers
         self.create_subscription(
             Detection2DArray,
             "aruco_detections",
             self.marker_callback,
             qos)
-
-        self.create_subscription(
-            Image,
-            "/oak/rgb/image_raw",
-            self.image_callback,
-            qos_profile_sensor_data)
-
-        self.create_subscription(
-            CameraInfo,
-            "/oak/rgb/camera_info",
-            self.camera_info_callback,
-            qos)
-
-        self.get_logger().info("Pointer Detector node starting up...")
-
-    def camera_info_callback(self, msg):
-        """Update camera parameters from calibration"""
-        self.cam.initPersProjWithoutDistortion(
-            msg.k[0], msg.k[4], msg.k[2], msg.k[5])
-        self.tracker.setCameraParameters(self.cam)
-        self.get_logger().info("Updated camera parameters")
+            
+        # Timer for touch detection
+        self.touch_timer = self.create_timer(0.1, self.check_touch_3d)
+        
+        self.get_logger().info("Pointer Detector initialized")
+        self.get_logger().info(f"Using pointer offset: X={self.offset_x}, Y={self.offset_y}, Z={self.offset_z}")
+        self.get_logger().info(f"Touch threshold: {self.touch_threshold}m")
 
     def marker_callback(self, msg):
-        """Handle marker detections"""
-        self.current_markers = {}
+        """Update marker positions from detections"""
+        current_time = self.get_clock().now()
+        
         for detection in msg.detections:
             marker_id = int(detection.results[0].hypothesis.class_id)
-            center = detection.bbox.center.position
-            self.current_markers[marker_id] = (center.x, center.y)
-            self.get_logger().debug(f"Marker {marker_id} at ({center.x}, {center.y})")
+            
+            try:
+                # Get marker position in camera frame
+                transform = self.tf_buffer.lookup_transform(
+                    self.camera_frame,
+                    f"aruco_{marker_id}",
+                    rclpy.time.Time())
+                
+                t = transform.transform.translation
+                self.markers[marker_id] = (t.x, t.y, t.z, current_time)
+                
+                self.get_logger().debug(f"Marker {marker_id} at ({t.x:.3f}, {t.y:.3f}, {t.z:.3f})")
+                
+            except (LookupException, ConnectivityException, ExtrapolationException) as e:
+                self.get_logger().warn(f"TF error for marker {marker_id}: {e}")
 
-    def image_callback(self, msg):
-        """Placeholder for image processing"""
-        if not hasattr(self, 'bridge'):
-            self.bridge = CvBridge()
+    def check_touch_3d(self):
+        """Check 3D distance between pointer and markers"""
+        current_time = self.get_clock().now()
         
-        # Convert ROS image to OpenCV
-        cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-
-        # Detect pointer using ViSP
-        self.tracker.track(cv_image)
-        blobs = self.tracker.getBlob()
-
-        if not blobs:
-            return
-
-        # Find largest the pointer
-        largest_blob = max(blobs, key=lambda b: b.getArea())
-
-        # Publish pointer position
-        pointer_pos = PointStamped()
-        pointer_pos.header = msg.header
-        pointer_pos.point.x = float(largest_blob.getCog().x)
-        pointer_pos.point.y = float(largest_blob.getCog().y)
-        self.pointer_pub.publish(pointer_pos)
-
-        # Check for touch if markers are present
-        self.check_touch(largest_blob, msg.header)
-
-    def check_touch(self, blob, header):
-        """Verify if pointer is touching any marker"""
-        if not hasattr(self, 'current_markers') or not self.current_markers:
-            return
-
-        pointer_pos = (blob.getCog().x, blob.getCog().y)
-
-        for marker_id, marker_pos in self.current_markers.items():
-            # Calculate distance
-            distance = np.linalg.norm(
-                np.array(pointer_pos) - np.array(marker_pos))
-
-            if self.cam.get_px() == 0:
-                self.get_logger().warn("Camera pixel size (self.cam.get_px()) is zero. Cannot compute metric distance.")
-                continue
-
-            metric_distance = distance / self.cam.get_px()
-
-            if metric_distance < self.get_parameter("touch_threshold").value:
-                self.get_logger().info(f"Touch detected on marker {marker_id} (distance: {metric_distance:.3f}m)")
-
-                # Publish touch event
-                touch_msg = Bool()
-                touch_msg.data = True
-                self.touch_pub.publish(touch_msg)
-
-                id_msg = Int32()
-                id_msg.data = marker_id
-                self.touch_id_pub.publish(id_msg)
-
+        # Clean up old markers
+        stale_markers = []
+        for marker_id, (_, _, _, last_seen) in self.markers.items():
+            if (current_time - last_seen).nanoseconds > self.marker_timeout * 1e9:
+                stale_markers.append(marker_id)
+        
+        for marker_id in stale_markers:
+            del self.markers[marker_id]
+            self.get_logger().info(f"Removed stale marker {marker_id}")
+        
+        # Get pointer position in camera frame
+        try:
+            # Get base_link position in camera frame
+            transform = self.tf_buffer.lookup_transform(
+                self.camera_frame,
+                self.base_frame,
+                rclpy.time.Time())
+            
+            # Apply pointer offset relative to base_link
+            base_x = transform.transform.translation.x
+            base_y = transform.transform.translation.y
+            base_z = transform.transform.translation.z
+            
+            # Create a point in base_link frame
+            pointer_pos = Point()
+            pointer_pos.x = base_x + self.offset_x
+            pointer_pos.y = base_y + self.offset_y
+            pointer_pos.z = base_z + self.offset_z
+            
+            # Publish pointer position for visualization/debugging
+            ptr_msg = PointStamped()
+            ptr_msg.header.stamp = self.get_clock().now().to_msg()
+            ptr_msg.header.frame_id = self.camera_frame
+            ptr_msg.point = pointer_pos
+            self.pointer_pub.publish(ptr_msg)
+            
+            # Check distance to each marker
+            for marker_id, (marker_x, marker_y, marker_z, _) in self.markers.items():
+                distance = math.sqrt(
+                    (pointer_pos.x - marker_x)**2 +
+                    (pointer_pos.y - marker_y)**2 +
+                    (pointer_pos.z - marker_z)**2
+                )
+                
+                if distance < self.touch_threshold:
+                    self.get_logger().info(f"Touch detected on marker {marker_id} (distance: {distance:.3f}m)")
+                    
+                    # Publish touch event
+                    touch_msg = Bool()
+                    touch_msg.data = True
+                    self.touch_pub.publish(touch_msg)
+                    
+                    id_msg = Int32()
+                    id_msg.data = marker_id
+                    self.touch_id_pub.publish(id_msg)
+                    
+                    # Remove marker after touch to prevent multiple detections
+                    if marker_id in self.markers:
+                        del self.markers[marker_id]
+                    return  # Only register one touch per cycle
+                    
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            self.get_logger().warn(f"TF error: {e}", throttle_duration_sec=5)
 
 def main():
     rclpy.init()
