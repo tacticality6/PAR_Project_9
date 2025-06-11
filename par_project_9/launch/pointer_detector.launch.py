@@ -15,7 +15,7 @@ def generate_launch_description():
         ),
         Node(
             package='par_project_9',
-            executable='visual_servoing_node',
+            executable='visual_servoing',
             name='visual_servoing_node'
         )
     ])
