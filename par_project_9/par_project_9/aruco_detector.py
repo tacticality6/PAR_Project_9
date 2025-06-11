@@ -12,7 +12,8 @@ from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import PointStamped
 
 from par_project_9_interfaces.msg import Marker
-import marker_definitions as md   
+from . import marker_definitions as md 
+
 class ArucoDetector(Node):
 
     def __init__(self):
