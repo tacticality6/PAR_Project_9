@@ -200,7 +200,7 @@ class VisualServoingNode(Node):
             error_y = marker_in_base.point.y - self.marker_offset['y']
             error_z = marker_in_base.point.z - self.marker_offset['z']
         except Exception as e:
-            self.get_logger().warn(f'Differential Calculation Fialed: {e}')
+            self.get_logger().warn(f'Differential Calculation Failed: {e}')
             return
         
         
