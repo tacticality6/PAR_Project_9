@@ -11,6 +11,8 @@ from tf2_ros import TransformBroadcaster
 
 from geometry_msgs.msg import PointStamped
 
+from par_project_9_interfaces.msg import Marker
+import marker_definitions as md   
 class ArucoDetector(Node):
 
     def __init__(self):
@@ -62,10 +64,8 @@ class ArucoDetector(Node):
                                 self.image_cb, qos_profile_sensor_data)
         
         # Add marker position publisher
-        self.marker_pos_pub = self.create_publisher(
-            PointStamped, 
-            "marker_position", 
-            10)
+        self.marker_pos_pub = self.create_publisher(PointStamped, "marker_position", 10)
+        self.marker_pub = self.create_publisher(Marker, 'markers_detected', 10)
         
         self.get_logger().info("\n 👻 💀 ☠️ 👽 👾 🤖 🦾 🦿 ArucoDetector ready to roll! 🤮 🤢 🤧 🤒 🤕 😭 😤 😵")
 
@@ -159,6 +159,13 @@ class ArucoDetector(Node):
             marker_pos.point.x = float(np.mean(corners[i][0][:, 0]))
             marker_pos.point.y = float(np.mean(corners[i][0][:, 1]))
             self.marker_pos_pub.publish(marker_pos)
+            
+            # ── publish a Marker.msg ───────────────────────────────────
+            m = Marker()
+            m.id = int(marker_id)
+            m.dest_id = md.dest_id(marker_id) # 0–4 for *any* legal tag
+            m.is_pickup = (md.classify(marker_id) == "pickup")
+            self._marker_pub.publish(m)
         
         # ─── draw debug overlay ──────────────────────────────────────────────
         if self.DEBUG_MODE:
