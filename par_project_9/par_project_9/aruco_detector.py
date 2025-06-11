@@ -23,8 +23,12 @@ class ArucoDetector(Node):
         self.DEBUG_MODE = True # set to True to enable debug overlay
         
         # which camera topics to listen to
-        self.declare_parameter("image_topic", "/oak/rgb/image_raw/compressed")
-        self.declare_parameter("info_topic", "/oak/rgb/camera_info")
+        self.declare_parameter("image_topic", "/oak/rgb/image_raw/compressed") # For Robot Red
+        self.declare_parameter("info_topic", "/oak/rgb/camera_info") # For Robot Red
+        
+        # self.declare_parameter("image_topic", "/camera/color/image_raw/compressed") # For Robot black
+        # self.declare_parameter("info_topic", "/camera/color/camera_info") # For Robot black
+        
         # aruco marker parameters
         self.declare_parameter("marker_size_m", 0.06) # 6 cm
         self.declare_parameter("aruco_dict", "DICT_4X4_50")
@@ -166,7 +170,7 @@ class ArucoDetector(Node):
             m.id = int(marker_id)
             m.dest_id = md.dest_id(marker_id) # 0–4 for *any* legal tag
             m.is_pickup = (md.classify(marker_id) == "pickup")
-            self._marker_pub.publish(m)
+            self.marker_pub.publish(m)
         
         # ─── draw debug overlay ──────────────────────────────────────────────
         if self.DEBUG_MODE:
