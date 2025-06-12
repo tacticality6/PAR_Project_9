@@ -6,17 +6,11 @@ from ament_index_python.packages import get_package_share_directory
 import os
 
 def generate_launch_description():
-
-    aruco_detector_launch_file = os.path.join(
-        get_package_share_directory("par_project_9"), "aruco.launch.py"
-    )
-
-
     return LaunchDescription([
         #launch visual servoing node
         Node(
             package='par_project_9',
-            executable='',
+            executable='visual_servoing',
             name="visual_servoing_node",
             output='screen',
             parameters=[
@@ -27,7 +21,7 @@ def generate_launch_description():
                 {"depth_image_topic": "/oak/rgb/image_raw/compressedDepth"},
                 {"info_topic": "/oak/rgb/camera_info"},
                 {"relocalise_pointer_freq": 5.0},
-                {"debug_mode", True},
+                {"debug_mode": True},
             ],
         ),
 
