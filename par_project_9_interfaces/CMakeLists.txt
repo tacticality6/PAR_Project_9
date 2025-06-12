@@ -21,10 +21,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Delivery.msg"
   "msg/Deliveries.msg"
   "msg/Marker.msg"
+  "msg/MarkerPointStamped.msg"
   
   "srv/MarkerConfirmation.srv"
 
-  DEPENDENCIES builtin_interfaces
+  DEPENDENCIES builtin_interfaces std_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)
