@@ -9,6 +9,7 @@ from enum import Enum
 import cv2, numpy as np
 from cv_bridge import CvBridge
 from par_project_9_interfaces.srv import MarkerConfirmation
+from par_project_9_interfaces.msg import MarkerPointStamped
 
 class VisualServoingState(Enum):
     IDLE = 0
@@ -29,7 +30,7 @@ class VisualServoingNode(Node):
 
         # ROS listeners / publishers
         self.marker_position_sub = self.create_subscription(
-            PointStamped,
+            MarkerPointStamped,
             self.touchedMarkerServiceName,
             self.marker_callback,
             qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
@@ -46,6 +47,8 @@ class VisualServoingNode(Node):
             self.touchedMarkerServiceName,
             qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         )
+        while not self.touch_confirm_client.wait_for_service(timeout=1.0):
+                self.get_logger().info("Marker Touched Service not available, Trying Again...")
 
         self.relocalise_pointer_timer = self.create_timer(
             self.relocaliseFreq,
@@ -170,8 +173,7 @@ class VisualServoingNode(Node):
             }
             self.get_logger().info(f"Pointer offset in base_link: {offset}")
             self.marker_offset = offset
-            # Save or publish this offset to use in your servoing node
-            # e.g., write to shared param, file, or topic
+
         except Exception as e:
             self.get_logger().error(f"TF transform failed: {e}")
 
@@ -189,7 +191,10 @@ class VisualServoingNode(Node):
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.5)
             )
-            marker_in_base = do_transform_point(msg, transform)
+            pointstamped = PointStamped()
+            pointstamped.header = msg.header
+            pointstamped.point = msg.point
+            marker_in_base = do_transform_point(pointstamped, transform)
         except Exception as e:
             self.get_logger().warn(f'TF transform failed: {e}')
             return
@@ -208,7 +213,15 @@ class VisualServoingNode(Node):
         if abs(error_x) < self.touchedDistanceTolerance and abs(error_y) < self.touchedDistanceTolerance:
             self.get_logger().info('Pointer aligned with marker — stopping.')
             self.publisher.publish(Twist())  # Zero velocity
-            #TODO - MARK complete
+            
+            #publish completed marker and set state to idle
+            srv_call = MarkerConfirmation.Request()
+            srv_call.marker = msg.marker
+            
+            srv_future = self.touch_confirm_client.call_async(srv_call)
+            self.state = VisualServoingState.IDLE
+            srv_future.add_done_callback(self.handle_service_future)
+
             return
         
 
@@ -218,4 +231,15 @@ class VisualServoingNode(Node):
         cmd.angular.z = -self.baseVelocity * marker_in_base.point.x  # turn toward marker
 
         self.vel_pub.publish(cmd)
+    
+
+    def handle_service_future(self, future):
+        try:
+            response = future.result()
+        except Exception as e:
+            self.get_logger().error("Marker Touch Service Failed")
         
+        if response is None:
+            self.get_logger().error("Marker Touch Service Returned Nothing")
+        else:
+            self.get_logger().info(f"Marker Touch Service Result: {'Succeeded' if response.success else 'Failed'}")
