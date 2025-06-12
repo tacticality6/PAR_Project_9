@@ -9,9 +9,10 @@ from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithP
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, Point
+from std_msgs.msg import Header
 
-from par_project_9_interfaces.msg import Marker
+from par_project_9_interfaces.msg import Marker, MarkerPointStamped
 from . import marker_definitions as md 
 
 class ArucoDetector(Node):
@@ -69,7 +70,7 @@ class ArucoDetector(Node):
                                 self.image_cb, qos_profile_sensor_data)
         
         # Add marker position publisher
-        self.marker_pos_pub = self.create_publisher(PointStamped, "marker_position", 10)
+        self.marker_pos_pub = self.create_publisher(MarkerPointStamped, "marker_position", 10)
         self.marker_pub = self.create_publisher(Marker, 'markers_detected', 10)
         
         self.get_logger().info("\n 👻 💀 ☠️ 👽 👾 🤖 🦾 🦿 ArucoDetector ready to roll! 🤮 🤢 🤧 🤒 🤕 😭 😤 😵")
@@ -159,11 +160,9 @@ class ArucoDetector(Node):
 
 
             # Publish marker position
-            marker_pos = PointStamped()
-            marker_pos.header = msg.header
+            marker_pos = Point()
             marker_pos.point.x = float(np.mean(corners[i][0][:, 0]))
             marker_pos.point.y = float(np.mean(corners[i][0][:, 1]))
-            self.marker_pos_pub.publish(marker_pos)
             
             # ── publish a Marker.msg ───────────────────────────────────
             m = Marker()
@@ -171,6 +170,15 @@ class ArucoDetector(Node):
             m.dest_id = md.dest_id(marker_id) # 0–4 for *any* legal tag
             m.is_pickup = (md.classify(marker_id) == "pickup")
             self.marker_pub.publish(m)
+
+            marker_pos_msg = MarkerPointStamped()
+            marker_pos_msg.header = msg.header
+            marker_pos_msg.point = marker_pos
+            marker_pos_msg.marker = m
+
+            self.marker_pos_pub.publish(marker_pos_msg)
+
+
         
         # ─── draw debug overlay ──────────────────────────────────────────────
         if self.DEBUG_MODE:
