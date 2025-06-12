@@ -22,12 +22,11 @@ class VisualServoingNode(Node):
         self.touchedMarkerServiceName = self.declare_parameter("touched_marker_service_name", "touched_marker").get_parameter_value().string_value
         self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.05).get_parameter_value().double_value
         self.baseVelocity = self.declare_parameter("base_velocity", 0.25).get_parameter_value().double_value
-        self.touchedMarkerServiceName = self.declare_parameter("touched_marker_service_name", "touched_marker").get_parameter_value().string_value
         self.colourImageTopic = self.declare_parameter("colour_image_topic", "/oak/rgb/image_raw/compressed").get_parameter_value().string_value
         self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/rgb/image_raw/compressedDepth").get_parameter_value().string_value
         self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
         self.relocaliseFreq = self.declare_parameter("relocalise_pointer_freq", 10.0).get_parameter_value().double_value
-
+        self.debugMode = self.declare_parameter("debug_mode", False).get_parameter_value().bool_value
         # ROS listeners / publishers
         self.marker_position_sub = self.create_subscription(
             MarkerPointStamped,
@@ -92,7 +91,7 @@ class VisualServoingNode(Node):
 
         #local variables
         self.marker_offset = None
-        self.state = VisualServoingState.IDLE
+        self.state = VisualServoingState.ACTIVE if self.debugMode else VisualServoingState.IDLE 
         self.color_image = None
         self.depth_image = None
         self.camera_info = None
@@ -243,3 +242,19 @@ class VisualServoingNode(Node):
             self.get_logger().error("Marker Touch Service Returned Nothing")
         else:
             self.get_logger().info(f"Marker Touch Service Result: {'Succeeded' if response.success else 'Failed'}")
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = VisualServoingNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
