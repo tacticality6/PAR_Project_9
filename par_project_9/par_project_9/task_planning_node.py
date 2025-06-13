@@ -42,25 +42,15 @@ class RobotState(Enum):
 class DetectedLocation:
     """Class to store information about detected pickup/delivery locations"""
     def __init__(self, marker_id: int, location_type: str, item_id: str, 
-                 position: Optional[Tuple[float, float]] = None, 
-                 last_seen: Optional[Time] = None):
+                 position: Optional[Tuple[float, float]] = None):
         self.marker_id = marker_id
         self.location_type = location_type  # 'pickup' or 'delivery'
         self.item_id = item_id
         self.position = position  # (x, y) in map frame
-        self.last_seen = last_seen
         
-    def update_position(self, x: float, y: float, timestamp: Time):
-        """Update the position and last seen time"""
+    def update_position(self, x: float, y: float):
+        """Update the position"""
         self.position = (x, y)
-        self.last_seen = timestamp
-        
-    def is_recent(self, current_time: Time, timeout_seconds: float = 30.0) -> bool:
-        """Check if the location was seen recently"""
-        if not self.last_seen:
-            return False
-        elapsed = (current_time - self.last_seen).nanoseconds / 1e9
-        return elapsed < timeout_seconds
 
 
 class TaskPlanningNode(Node):
@@ -78,7 +68,6 @@ class TaskPlanningNode(Node):
                 ('navigation_timeout', 30.0),   # Max time to wait for navigation
                 ('pickup_timeout', 15.0),       # Max time to attempt pickup
                 ('delivery_timeout', 15.0),     # Max time to attempt delivery
-                ('location_timeout', 30.0),     # Time before location is considered stale
                 ('decision_frequency', 2.0),    # Hz for main decision loop
             ]
         )
@@ -99,6 +88,9 @@ class TaskPlanningNode(Node):
         self.current_target_marker_id: Optional[int] = None
         self.current_target_item_id: Optional[str] = None
         self.current_navigation_goal: Optional[PoseStamped] = None
+        
+        # Track most recent marker detections for checking marker presence
+        self.recently_detected_markers: set = set()
         
         # Mission statistics
         self.mission_start_time = self.get_clock().now()
@@ -232,7 +224,9 @@ class TaskPlanningNode(Node):
 
     def markers_callback(self, msg: Detection2DArray):
         """Handle ArUco marker detections to update location map"""
-        current_time = self.get_clock().now()
+        
+        # Update list of currently detected markers
+        currently_detected = set()
         
         for detection in msg.detections:
             if not detection.results:
@@ -240,6 +234,7 @@ class TaskPlanningNode(Node):
                 
             try:
                 marker_id = int(detection.results[0].hypothesis.class_id)
+                currently_detected.add(marker_id)
             except ValueError:
                 continue
             
@@ -262,12 +257,15 @@ class TaskPlanningNode(Node):
             
             # Update or create location entry
             if marker_id in self.known_locations:
-                self.known_locations[marker_id].update_position(x, y, current_time)
+                self.known_locations[marker_id].update_position(x, y)
             else:
                 self.known_locations[marker_id] = DetectedLocation(
-                    marker_id, location_type, item_id, (x, y), current_time
+                    marker_id, location_type, item_id, (x, y)
                 )
                 self.get_logger().info(f"New {location_type} location discovered: {item_id} (marker {marker_id})")
+        
+        # Update the set of recently detected markers
+        self.recently_detected_markers = currently_detected
 
     def navigation_status_callback(self, msg: String):
         """Handle navigation status updates"""
@@ -400,7 +398,15 @@ class TaskPlanningNode(Node):
         """Handle pickup action state"""
         # Pickup is handled by visual servoing and marker confirmation
         # This state waits for touch confirmation
-        pass
+        
+        # Check if target marker is still visible after arriving at location
+        if time_in_state > 3.0:  # Give some time for visual servoing to start
+            if not self._is_target_marker_currently_detected():
+                self.get_logger().warn(f"Target pickup marker {self.current_target_marker_id} not visible at expected location")
+                self._remove_marker_from_known_locations(self.current_target_marker_id)
+                self.get_logger().info("Marker removed from known locations - returning to planning")
+                self.transition_to_state(RobotState.PLANNING)
+                return
 
     def _handle_navigating_to_delivery_state(self, time_in_state: float):
         """Handle navigation to delivery location"""
@@ -412,7 +418,15 @@ class TaskPlanningNode(Node):
         """Handle delivery action state"""
         # Delivery is handled by visual servoing and marker confirmation
         # This state waits for touch confirmation
-        pass
+        
+        # Check if target marker is still visible after arriving at location
+        if time_in_state > 3.0:  # Give some time for visual servoing to start
+            if not self._is_target_marker_currently_detected():
+                self.get_logger().warn(f"Target delivery marker {self.current_target_marker_id} not visible at expected location")
+                self._remove_marker_from_known_locations(self.current_target_marker_id)
+                self.get_logger().info("Marker removed from known locations - returning to planning")
+                self.transition_to_state(RobotState.PLANNING)
+                return
 
     # === NAVIGATION AND ACTION METHODS ===
     
@@ -443,7 +457,13 @@ class TaskPlanningNode(Node):
 
     def _handle_failed_touch(self):
         """Handle failed marker touch"""
-        self.get_logger().warn("Marker touch failed - returning to planning")
+        self.get_logger().warn("Marker touch failed - checking if marker is still present")
+        
+        # Check if the marker is still visible - if not, remove it from known locations
+        if not self._is_target_marker_currently_detected():
+            self.get_logger().warn(f"Target marker {self.current_target_marker_id} no longer visible - removing from known locations")
+            self._remove_marker_from_known_locations(self.current_target_marker_id)
+        
         self.transition_to_state(RobotState.PLANNING)
 
     def _activate_visual_servoing(self):
@@ -546,7 +566,6 @@ class TaskPlanningNode(Node):
         available_deliveries = []
         for marker_id, location in self.known_locations.items():
             if (location.location_type == 'delivery' and 
-                location.is_recent(current_time) and
                 marker_id in needed_destinations):
                 available_deliveries.append(marker_id)
         
@@ -563,8 +582,7 @@ class TaskPlanningNode(Node):
         
         # Check for pickups
         for location in self.known_locations.values():
-            if (location.location_type == 'pickup' and 
-                location.is_recent(current_time)):
+            if (location.location_type == 'pickup'):
                 return True
         
         # Check for deliveries if we have packages
@@ -572,7 +590,6 @@ class TaskPlanningNode(Node):
             needed_destinations = {pkg.destination_id for pkg in self.packages_on_board}
             for marker_id, location in self.known_locations.items():
                 if (location.location_type == 'delivery' and 
-                    location.is_recent(current_time) and
                     marker_id in needed_destinations):
                     return True
         
@@ -670,6 +687,23 @@ class TaskPlanningNode(Node):
                 info.get('item_id') == item_id):
                 return marker_id
         return None
+
+    def _is_target_marker_currently_detected(self) -> bool:
+        """Check if the current target marker is in the most recent detections"""
+        if self.current_target_marker_id is None:
+            return False
+        
+        return self.current_target_marker_id in self.recently_detected_markers
+
+    def _remove_marker_from_known_locations(self, marker_id: int):
+        """Remove a marker from known locations"""
+        if marker_id in self.known_locations:
+            location = self.known_locations[marker_id]
+            item_name = location.item_id or f"marker_{marker_id}"
+            self.get_logger().info(f"Removing {location.location_type} location for {item_name} (marker {marker_id})")
+            del self.known_locations[marker_id]
+        else:
+            self.get_logger().warn(f"Attempted to remove marker {marker_id} but it's not in known locations")
 
     def transition_to_state(self, new_state: RobotState):
         """Transition to a new state with logging and cleanup"""
