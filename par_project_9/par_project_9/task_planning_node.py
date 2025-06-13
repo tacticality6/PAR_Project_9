@@ -245,8 +245,8 @@ class TaskPlanningNode(Node):
             location_type = marker_info['type']
             item_id = marker_info.get('item_id')
             
-            # Only track pickup and delivery locations
-            if location_type not in ['pickup', 'delivery']:
+            # Only track delivery locations (not pickup locations)
+            if location_type != 'delivery':
                 continue
             
             # Extract position from detection (this is simplified - in practice you'd 
@@ -307,12 +307,8 @@ class TaskPlanningNode(Node):
             self._handle_planning_state()
         elif self.current_state == RobotState.EXPLORING:
             self._handle_exploring_state(time_in_state)
-        elif self.current_state == RobotState.PICKING_UP:
-            self._handle_picking_up_state(time_in_state)
         elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
             self._handle_navigating_to_delivery_state(time_in_state)
-        elif self.current_state == RobotState.DELIVERING:
-            self._handle_delivering_state(time_in_state)
 
     def _check_state_timeout(self, time_in_state: float) -> bool:
         """Check if current state has timed out and handle accordingly"""
@@ -369,8 +365,8 @@ class TaskPlanningNode(Node):
                 self._initiate_exploration()
                 return
         
-        # Second priority: pickup new packages
-        self.get_logger().info("No known pickup locations - exploring")
+        # No packages to deliver - start exploring to find new markers
+        self.get_logger().info("No packages on board - exploring for pickup opportunities")
         self._initiate_exploration()
         return
 
@@ -384,39 +380,11 @@ class TaskPlanningNode(Node):
                 self.stop_exploration()
                 self.transition_to_state(RobotState.PLANNING)
 
-    def _handle_picking_up_state(self, time_in_state: float):
-        """Handle pickup action state"""
-        # Pickup is handled by visual servoing and marker confirmation
-        # This state waits for touch confirmation
-        
-        # Check if target marker is still visible after arriving at location
-        if time_in_state > 3.0:  # Give some time for visual servoing to start
-            if not self._is_target_marker_currently_detected():
-                self.get_logger().warn(f"Target pickup marker {self.current_target_marker_id} not visible at expected location")
-                self._remove_marker_from_known_locations(self.current_target_marker_id)
-                self.get_logger().info("Marker removed from known locations - returning to planning")
-                self.transition_to_state(RobotState.PLANNING)
-                return
-
     def _handle_navigating_to_delivery_state(self, time_in_state: float):
         """Handle navigation to delivery location"""
         # Navigation progress is handled by navigation_status_callback
         # This state waits for navigation completion
         pass
-
-    def _handle_delivering_state(self, time_in_state: float):
-        """Handle delivery action state"""
-        # Delivery is handled by visual servoing and marker confirmation
-        # This state waits for touch confirmation
-        
-        # Check if target marker is still visible after arriving at location
-        if time_in_state > 3.0:  # Give some time for visual servoing to start
-            if not self._is_target_marker_currently_detected():
-                self.get_logger().warn(f"Target delivery marker {self.current_target_marker_id} not visible at expected location")
-                self._remove_marker_from_known_locations(self.current_target_marker_id)
-                self.get_logger().info("Marker removed from known locations - returning to planning")
-                self.transition_to_state(RobotState.PLANNING)
-                return
 
     # === NAVIGATION AND ACTION METHODS ===
     
@@ -561,12 +529,7 @@ class TaskPlanningNode(Node):
         return available_deliveries[0]
 
     def _has_actionable_locations(self) -> bool:
-        """Check if we have any actionable locations (pickups or needed deliveries)"""
-        # Check for pickups
-        for location in self.known_locations.values():
-            if (location.location_type == 'pickup'):
-                return True
-        
+        """Check if we have any actionable locations (needed deliveries)"""
         # Check for deliveries if we have packages
         if self.packages_on_board:
             needed_destinations = {pkg.destination_id for pkg in self.packages_on_board}
@@ -576,28 +539,6 @@ class TaskPlanningNode(Node):
                     return True
         
         return False
-
-    def _initiate_pickup(self, marker_id: int):
-        """Initiate pickup sequence for the specified marker"""
-        self.current_target_marker_id = marker_id
-        
-        if marker_id in MARKER_MAP:
-            item_id = MARKER_MAP[marker_id]['item_id']
-            self.current_target_item_id = item_id
-            self.get_logger().info(f"Initiating pickup of {item_id} at marker {marker_id}")
-        
-        # Send navigation goal (simplified - in practice you'd use the actual map coordinates)
-        if marker_id in self.known_locations:
-            location = self.known_locations[marker_id]
-            if location.position:
-                self._send_navigation_goal(location.position[0], location.position[1])
-                self.transition_to_state(RobotState.NAVIGATING_TO_DELIVERY)
-            else:
-                self.get_logger().error(f"No position available for marker {marker_id}")
-                self.transition_to_state(RobotState.PLANNING)
-        else:
-            self.get_logger().error(f"Marker {marker_id} not in known locations")
-            self.transition_to_state(RobotState.PLANNING)
 
     def _initiate_delivery(self, marker_id: int):
         """Initiate delivery sequence for the specified marker"""
