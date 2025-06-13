@@ -46,7 +46,7 @@ class VisualServoingNode(Node):
             self.touchedMarkerServiceName,
             qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         )
-        while not self.touch_confirm_client.wait_for_service(timeout=1.0):
+        while not self.touch_confirm_client.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info("Marker Touched Service not available, Trying Again...")
 
         self.relocalise_pointer_timer = self.create_timer(
