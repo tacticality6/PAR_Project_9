@@ -32,7 +32,6 @@ class RobotState(Enum):
     """Robot state enumeration for task planning state machine"""
     IDLE = "idle"
     EXPLORING = "exploring" 
-    NAVIGATING_TO_PICKUP = "navigating_to_pickup"
     PICKING_UP = "picking_up"
     NAVIGATING_TO_DELIVERY = "navigating_to_delivery"
     DELIVERING = "delivering"
@@ -308,8 +307,6 @@ class TaskPlanningNode(Node):
             self._handle_planning_state()
         elif self.current_state == RobotState.EXPLORING:
             self._handle_exploring_state(time_in_state)
-        elif self.current_state == RobotState.NAVIGATING_TO_PICKUP:
-            self._handle_navigating_to_pickup_state(time_in_state)
         elif self.current_state == RobotState.PICKING_UP:
             self._handle_picking_up_state(time_in_state)
         elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
@@ -320,7 +317,6 @@ class TaskPlanningNode(Node):
     def _check_state_timeout(self, time_in_state: float) -> bool:
         """Check if current state has timed out and handle accordingly"""
         timeout_map = {
-            RobotState.NAVIGATING_TO_PICKUP: self.get_parameter('navigation_timeout').value,
             RobotState.NAVIGATING_TO_DELIVERY: self.get_parameter('navigation_timeout').value,
             RobotState.PICKING_UP: self.get_parameter('pickup_timeout').value,
             RobotState.DELIVERING: self.get_parameter('delivery_timeout').value,
@@ -340,7 +336,7 @@ class TaskPlanningNode(Node):
         if self.current_state == RobotState.EXPLORING:
             self.get_logger().info("Exploration timeout - returning to planning")
             self.transition_to_state(RobotState.PLANNING)
-        elif self.current_state in [RobotState.NAVIGATING_TO_PICKUP, RobotState.NAVIGATING_TO_DELIVERY]:
+        elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
             self.get_logger().info("Navigation timeout - returning to planning")
             self.transition_to_state(RobotState.PLANNING)
         elif self.current_state == RobotState.PICKING_UP:
@@ -388,12 +384,6 @@ class TaskPlanningNode(Node):
                 self.stop_exploration()
                 self.transition_to_state(RobotState.PLANNING)
 
-    def _handle_navigating_to_pickup_state(self, time_in_state: float):
-        """Handle navigation to pickup location"""
-        # Navigation progress is handled by navigation_status_callback
-        # This state waits for navigation completion
-        pass
-
     def _handle_picking_up_state(self, time_in_state: float):
         """Handle pickup action state"""
         # Pickup is handled by visual servoing and marker confirmation
@@ -432,11 +422,7 @@ class TaskPlanningNode(Node):
     
     def _handle_navigation_success(self):
         """Handle successful navigation arrival"""
-        if self.current_state == RobotState.NAVIGATING_TO_PICKUP:
-            self.get_logger().info("Arrived at pickup location - initiating pickup")
-            self.transition_to_state(RobotState.PICKING_UP)
-            self._activate_visual_servoing()
-        elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
+        if self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
             self.get_logger().info("Arrived at delivery location - initiating delivery")
             self.transition_to_state(RobotState.DELIVERING)
             self._activate_visual_servoing()
@@ -555,8 +541,6 @@ class TaskPlanningNode(Node):
         if not self.packages_on_board:
             return None
         
-        current_time = self.get_clock().now()
-        
         # Get all destination IDs we need to deliver to
         needed_destinations = set()
         for package in self.packages_on_board:
@@ -578,8 +562,6 @@ class TaskPlanningNode(Node):
 
     def _has_actionable_locations(self) -> bool:
         """Check if we have any actionable locations (pickups or needed deliveries)"""
-        current_time = self.get_clock().now()
-        
         # Check for pickups
         for location in self.known_locations.values():
             if (location.location_type == 'pickup'):
@@ -609,7 +591,7 @@ class TaskPlanningNode(Node):
             location = self.known_locations[marker_id]
             if location.position:
                 self._send_navigation_goal(location.position[0], location.position[1])
-                self.transition_to_state(RobotState.NAVIGATING_TO_PICKUP)
+                self.transition_to_state(RobotState.NAVIGATING_TO_DELIVERY)
             else:
                 self.get_logger().error(f"No position available for marker {marker_id}")
                 self.transition_to_state(RobotState.PLANNING)
