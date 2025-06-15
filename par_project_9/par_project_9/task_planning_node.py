@@ -4,16 +4,15 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from rclpy.duration import Duration
-from rclpy.time import Time
 import json
-import math
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
+import tf2_ros
+from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
 # Standard ROS2 messages
 from std_msgs.msg import String, Int32, Bool
-from geometry_msgs.msg import PoseStamped, PointStamped
+from geometry_msgs.msg import PoseStamped
 from vision_msgs.msg import Detection2DArray
 
 # Custom interfaces
@@ -45,11 +44,12 @@ class DetectedLocation:
         self.marker_id = marker_id
         self.location_type = location_type  # 'pickup' or 'delivery'
         self.item_id = item_id
-        self.position = position  # (x, y) in map frame
+        self.position = position  # (x, y, z) in map frame
+
         
-    def update_position(self, x: float, y: float):
+    def update_position(self, x: float, y: float, z: float = 0.0):
         """Update the position"""
-        self.position = (x, y)
+        self.position = (x, y, z)
 
 
 class TaskPlanningNode(Node):
@@ -68,8 +68,18 @@ class TaskPlanningNode(Node):
                 ('pickup_timeout', 15.0),       # Max time to attempt pickup
                 ('delivery_timeout', 15.0),     # Max time to attempt delivery
                 ('decision_frequency', 2.0),    # Hz for main decision loop
+                ('marker_timeout', 10.0),       # Time before considering marker lost
+                ('use_tf_for_positions', True), # Use TF transforms for marker positions
+                ('map_frame', 'map'),           # Map frame for navigation
+                ('base_frame', 'base_link'),    # Robot base frame
             ]
         )
+
+        # === TF SETUP ===
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.map_frame = self.get_parameter('map_frame').value
+        self.base_frame = self.get_parameter('base_frame').value
 
         # === STATE VARIABLES ===
         self.current_state = RobotState.IDLE
@@ -87,15 +97,19 @@ class TaskPlanningNode(Node):
         self.current_target_marker_id: Optional[int] = None
         self.current_target_item_id: Optional[str] = None
         self.current_navigation_goal: Optional[PoseStamped] = None
+        self.current_task_type: Optional[str] = None  # 'pickup' or 'delivery'
         
         # Track most recent marker detections for checking marker presence
-        self.recently_detected_markers: set = set()
+        self.detected_markers: set = set()
+
         
         # Mission statistics
         self.mission_start_time = self.get_clock().now()
         self.exploration_cycles = 0
         self.failed_pickup_attempts = 0
         self.failed_delivery_attempts = 0
+        self.successful_pickups = 0
+        self.successful_deliveries = 0
 
         # === PUBLISHERS ===
         # Exploration control
@@ -148,6 +162,11 @@ class TaskPlanningNode(Node):
         self.touch_status_sub = self.create_subscription(
             Bool, "marker_touched", self.touch_status_callback, qos_profile
         )
+        
+        # Touch attempt status from visual servoing
+        self.touch_attempt_sub = self.create_subscription(
+            Bool, "touch_attempt_status", self.touch_attempt_callback, qos_profile
+        )
 
         # === SERVICE CLIENTS ===
         # Service client for confirming marker touches
@@ -167,6 +186,8 @@ class TaskPlanningNode(Node):
         self.get_logger().info(f"Task Planning Node '{node_name}' initialised")
         self.get_logger().info(f"- Decision frequency: {decision_freq} Hz")
         self.get_logger().info(f"- Available marker definitions: {len(MARKER_MAP)}")
+        self.get_logger().info(f"- Map frame: {self.map_frame}")
+        self.get_logger().info(f"- Base frame: {self.base_frame}")
         
         # Log available marker pairs
         self._log_available_markers()
@@ -212,6 +233,7 @@ class TaskPlanningNode(Node):
         
         if current_count > previous_count:
             self.total_deliveries_completed = current_count
+            self.successful_deliveries += (current_count - previous_count)
             new_deliveries = current_count - previous_count
             self.get_logger().info(f"New deliveries completed! Total: {current_count} (+{new_deliveries})")
             
@@ -245,26 +267,49 @@ class TaskPlanningNode(Node):
             location_type = marker_info['type']
             item_id = marker_info.get('item_id')
             
-            # Only track delivery locations (not pickup locations)
-            if location_type != 'delivery':
+            # Skip non-actionable markers (like home_base)
+            if location_type not in ['pickup', 'delivery']:
                 continue
             
-            # Extract position from detection (this is simplified - in practice you'd 
-            # want to transform to map coordinates using TF)
-            x = detection.bbox.center.position.x
-            y = detection.bbox.center.position.y
+            # Get marker position using TF if available
+            position = self._get_marker_position_from_tf(marker_id)
+            if position is None:
+                # Fallback to detection bbox center (camera coordinates)
+                x = detection.bbox.center.position.x
+                y = detection.bbox.center.position.y
+                position = (x, y, 0.0)
             
             # Update or create location entry
             if marker_id in self.known_locations:
-                self.known_locations[marker_id].update_position(x, y)
+                self.known_locations[marker_id].update_position(*position)
             else:
                 self.known_locations[marker_id] = DetectedLocation(
-                    marker_id, location_type, item_id, (x, y)
+                    marker_id, location_type, item_id, position
                 )
-                self.get_logger().info(f"New {location_type} location discovered: {item_id} (marker {marker_id})")
+                self.get_logger().info(f"New {location_type} location discovered: {item_id} (marker {marker_id}) at {position}")
         
         # Update the set of recently detected markers
-        self.recently_detected_markers = currently_detected
+        self.detected_markers = currently_detected
+
+    def _get_marker_position_from_tf(self, marker_id: int) -> Optional[Tuple[float, float, float]]:
+        """Get marker position in map frame using TF"""
+        if not self.get_parameter('use_tf_for_positions').value:
+            return None
+            
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                f"aruco_{marker_id}",
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            
+            t = transform.transform.translation
+            return (t.x, t.y, t.z)
+            
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            self.get_logger().debug(f"TF lookup failed for marker {marker_id}: {e}")
+            return None
 
     def navigation_status_callback(self, msg: String):
         """Handle navigation status updates"""
@@ -289,6 +334,14 @@ class TaskPlanningNode(Node):
             self.get_logger().warn("Marker touch failed")
             self._handle_failed_touch()
 
+    def touch_attempt_callback(self, msg: Bool):
+        """Handle touch attempt status from visual servoing"""
+        # This provides feedback on ongoing touch attempts
+        if msg.data:
+            self.get_logger().debug("Touch attempt in progress")
+        else:
+            self.get_logger().debug("No active touch attempt")
+
     # === MAIN DECISION LOOP ===
     
     def main_decision_loop(self):
@@ -309,6 +362,8 @@ class TaskPlanningNode(Node):
             self._handle_exploring_state(time_in_state)
         elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
             self._handle_navigating_to_delivery_state(time_in_state)
+        elif self.current_state == RobotState.DELIVERING:
+            self._handle_delivering_state(time_in_state)
 
     def _check_state_timeout(self, time_in_state: float) -> bool:
         """Check if current state has timed out and handle accordingly"""
@@ -386,6 +441,11 @@ class TaskPlanningNode(Node):
         # This state waits for navigation completion
         pass
 
+    def _handle_delivering_state(self, time_in_state: float):
+        """Handle delivery operation state"""
+        # Visual servoing should be active, waiting for touch confirmation
+        pass
+
     # === NAVIGATION AND ACTION METHODS ===
     
     def _handle_navigation_success(self):
@@ -398,15 +458,21 @@ class TaskPlanningNode(Node):
     def _handle_navigation_failure(self):
         """Handle navigation failure"""
         self.get_logger().warn("Navigation failed - returning to planning")
+        # Remove the target location if navigation consistently fails
+        if self.current_target_marker_id and self.current_target_marker_id in self.known_locations:
+            self.get_logger().warn(f"Removing unreachable marker {self.current_target_marker_id} from known locations")
+            del self.known_locations[self.current_target_marker_id]
         self.transition_to_state(RobotState.PLANNING)
 
     def _handle_successful_touch(self):
         """Handle successful marker touch"""
         if self.current_state == RobotState.PICKING_UP:
             self.get_logger().info("Pickup touch successful - confirming with delivery tracker")
+            self.successful_pickups += 1
             self._confirm_pickup()
         elif self.current_state == RobotState.DELIVERING:
             self.get_logger().info("Delivery touch successful - confirming with delivery tracker")
+            self.successful_deliveries += 1
             self._confirm_delivery()
 
     def _handle_failed_touch(self):
@@ -543,13 +609,14 @@ class TaskPlanningNode(Node):
     def _initiate_delivery(self, marker_id: int):
         """Initiate delivery sequence for the specified marker"""
         self.current_target_marker_id = marker_id
+        self.current_task_type = 'delivery'
         
         if marker_id in MARKER_MAP:
             item_id = MARKER_MAP[marker_id]['item_id']
             self.current_target_item_id = item_id
             self.get_logger().info(f"Initiating delivery of {item_id} at marker {marker_id}")
         
-        # Send navigation goal (simplified - in practice you'd use the actual map coordinates)
+        # Send navigation goal
         if marker_id in self.known_locations:
             location = self.known_locations[marker_id]
             if location.position:
@@ -583,7 +650,7 @@ class TaskPlanningNode(Node):
     def _send_navigation_goal(self, x: float, y: float):
         """Send a navigation goal to the navigation system"""
         goal_msg = PoseStamped()
-        goal_msg.header.frame_id = "map"
+        goal_msg.header.frame_id = self.map_frame
         goal_msg.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.position.x = x
         goal_msg.pose.position.y = y
@@ -592,7 +659,7 @@ class TaskPlanningNode(Node):
         
         self.navigation_command_pub.publish(goal_msg)
         self.current_navigation_goal = goal_msg
-        self.get_logger().info(f"Sent navigation goal: ({x:.2f}, {y:.2f})")
+        self.get_logger().info(f"Sent navigation goal: ({x:.2f}, {y:.2f}) in {self.map_frame}")
 
     # === UTILITY METHODS ===
     
@@ -616,7 +683,7 @@ class TaskPlanningNode(Node):
         if self.current_target_marker_id is None:
             return False
         
-        return self.current_target_marker_id in self.recently_detected_markers
+        return self.current_target_marker_id in self.detected_markers
 
     def _remove_marker_from_known_locations(self, marker_id: int):
         """Remove a marker from known locations"""
@@ -650,6 +717,7 @@ class TaskPlanningNode(Node):
             self.current_target_marker_id = None
             self.current_target_item_id = None
             self.current_navigation_goal = None
+            self.current_task_type = None
 
     def publish_status(self):
         """Publish periodic status updates"""
@@ -665,6 +733,10 @@ class TaskPlanningNode(Node):
             "exploration_cycles": self.exploration_cycles,
             "failed_pickups": self.failed_pickup_attempts,
             "failed_deliveries": self.failed_delivery_attempts,
+            "successful_pickups": self.successful_pickups,
+            "successful_deliveries": self.successful_deliveries,
+            "current_target": self.current_target_marker_id,
+            "current_task": self.current_task_type,
         }
         
         status_msg = String()
@@ -677,7 +749,8 @@ class TaskPlanningNode(Node):
             f"State: {self.current_state.value} | "
             f"Packages: {len(self.packages_on_board)} | "
             f"Deliveries: {self.total_deliveries_completed} | "
-            f"Locations: {len(self.known_locations)}"
+            f"Locations: {len(self.known_locations)} | "
+            f"Target: {self.current_target_marker_id} ({self.current_task_type})"
         )
 
 
