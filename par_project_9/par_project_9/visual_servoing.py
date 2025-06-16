@@ -47,13 +47,13 @@ class VisualServoingNode(Node):
         self.touch_confirm_client = self.create_client(
             MarkerConfirmation,
             self.touchedMarkerServiceName,
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         )
         while not self.touch_confirm_client.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info("Marker Touched Service not available, Trying Again...")
 
         self.relocalise_pointer_timer = self.create_timer(
-            self.relocaliseFreq,
+            1.0/self.relocaliseFreq,
             self.localise_pointer
         )
 
@@ -102,6 +102,7 @@ class VisualServoingNode(Node):
         self.color_image = None
         self.depth_image = None
         self.camera_info = None
+        self.get_logger().info("Visual Servoing Node has been initialized.")
 
     def color_callback(self, msg):
         np_arr = np.frombuffer(msg.data, np.uint8)
@@ -114,10 +115,18 @@ class VisualServoingNode(Node):
         # self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def depth_callback(self, msg):
-        try:
-            self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-        except Exception as e:
-            self.get_logger().error(f"Could not convert depth image: {e}")
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        self.depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+        
+        if self.depth_image is None:
+            self.get_logger().warn("Failed to decode compressed depth image")
+            return
+
+    # def depth_callback(self, msg):
+    #     try:
+    #         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+    #     except Exception as e:
+    #         self.get_logger().error(f"Could not convert depth image: {e}")
 
     def camera_info_callback(self, msg):
         self.camera_info = msg
@@ -129,6 +138,8 @@ class VisualServoingNode(Node):
         if self.color_image is None or self.depth_image is None or self.camera_info is None:
             self.get_logger().info("Waiting for camera data...")
             return
+        
+        self.get_logger().info("Attempting to localise pointer position...")
 
         # Define orange color range in HSV
         hsv = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2HSV)
