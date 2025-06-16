@@ -56,6 +56,9 @@ class VisualServoingNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.bridge = CvBridge()
 
+        self.debug_mask_pub = self.create_publisher(Image, '~/debug_mask', 10)
+        self.get_logger().info("Debug mask publisher created on topic '~/debug_mask'")
+
         # Local variables
         self.marker_offset = None
         self.state = VisualServoingState.ACTIVE if self.debugMode else VisualServoingState.IDLE 
@@ -92,9 +95,15 @@ class VisualServoingNode(Node):
         hsv = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2HSV)
         
         lower_orange = np.array([0, 70, 70])
-        upper_orange = np.array([30, 255, 255])
+        upper_orange = np.array([35, 255, 255])
         
         mask = cv2.inRange(hsv, lower_orange, upper_orange)
+
+        try:
+            debug_msg = self.bridge.cv2_to_imgmsg(mask, encoding="mono8")
+            self.debug_mask_pub.publish(debug_msg)
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish debug mask: {e}")
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours: return
