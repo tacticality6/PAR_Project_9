@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from tf2_ros import Buffer, TransformListener
 from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
 from geometry_msgs.msg import PointStamped, Twist
@@ -28,10 +28,12 @@ class VisualServoingNode(Node):
         self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
         self.relocaliseFreq = self.declare_parameter("relocalise_pointer_freq", 10.0).get_parameter_value().double_value
         self.debugMode = self.declare_parameter("debug_mode", False).get_parameter_value().bool_value
+
         # ROS listeners / publishers
         self.marker_position_sub = self.create_subscription(
             MarkerPointStamped,
-            self.touchedMarkerServiceName,
+            "marker_position",
+            # self.touchedMarkerServiceName,
             self.marker_callback,
             qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         )
@@ -59,28 +61,32 @@ class VisualServoingNode(Node):
             CompressedImage,
             self.colourImageTopic,
             self.color_callback,
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            qos_profile_sensor_data
         )
 
         self.depth_image_sub = self.create_subscription(
             CompressedImage,
             self.depthImageTopic,
             self.color_callback,
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            qos_profile_sensor_data
         )
 
-        self.color_image_sub = self.create_subscription(
-            CompressedImage,
-            self.colourImageTopic,
-            self.depth_callback,
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        )
+        # self.color_image_sub = self.create_subscription(
+        #     CompressedImage,
+        #     self.colourImageTopic,
+        #     self.depth_callback,
+        #     # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        #     qos_profile_sensor_data
+        # )
 
         self.camera_info_sub = self.create_subscription(
             CameraInfo,
             self.cameraInfoTopic,
             self.camera_info_callback,
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)4
+            qos_profile_sensor_data
         )
 
         #tf setup
@@ -105,16 +111,18 @@ class VisualServoingNode(Node):
             self.get_logger().warn("Failed to decode compressed image in visual_servoing_node")
             return
 
-        self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        # self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def depth_callback(self, msg):
-        self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        try:
+            self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as e:
+            self.get_logger().error(f"Could not convert depth image: {e}")
 
     def camera_info_callback(self, msg):
         self.camera_info = msg
 
 
-    
 
     def localise_pointer(self):
         self.get_logger().info("Localising pointer position...")
