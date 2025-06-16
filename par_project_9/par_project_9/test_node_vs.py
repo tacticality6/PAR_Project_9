@@ -1,185 +1,127 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from tf2_ros import Buffer, TransformListener
-from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
-from geometry_msgs.msg import PointStamped, Twist
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException
+from geometry_msgs.msg import Twist
 from enum import Enum
-import cv2
-import numpy as np
-from cv_bridge import CvBridge
+import math
+
 from par_project_9_interfaces.srv import MarkerConfirmation
-from par_project_9_interfaces.msg import MarkerPointStamped
+from par_project_9_interfaces.msg import MarkerPointStamped, Marker
 
 class VisualServoingState(Enum):
     IDLE = 0
-    ACTIVE = 1
+    APPROACHING = 1
 
 class VisualServoingNode(Node):
     def __init__(self):
         super().__init__("visual_servoing_node")
-        # Parameters
-        self.touchedMarkerServiceName = self.declare_parameter("touched_marker_service_name", "touched_marker").get_parameter_value().string_value
-        self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.05).get_parameter_value().double_value
-        self.baseVelocity = self.declare_parameter("base_velocity", 0.25).get_parameter_value().double_value
-        self.colourImageTopic = self.declare_parameter("colour_image_topic", "/oak/rgb/image_raw/compressed").get_parameter_value().string_value
-        # Using the compressed depth topic, consistent with your launch file
-        self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/rgb/image_raw/compressedDepth").get_parameter_value().string_value
-        self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
-        self.relocaliseFreq = self.declare_parameter("relocalise_pointer_freq", 5.0).get_parameter_value().double_value
-        self.debugMode = self.declare_parameter("debug_mode", False).get_parameter_value().bool_value
-        
-        # A robust QoS profile for camera data
-        camera_qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            depth=10 
-        )
 
-        # ROS Communications
-        self.marker_position_sub = self.create_subscription(MarkerPointStamped, "marker_position", self.marker_callback, 10)
-        self.vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.touch_confirm_client = self.create_client(MarkerConfirmation, self.touchedMarkerServiceName)
+        # --- Parameters ---
+        self.declare_parameter('k_p_linear', 0.5, "Proportional gain for forward/backward speed")
+        self.declare_parameter('k_p_angular', 1.5, "Proportional gain for turning speed")
+        self.declare_parameter('max_linear_speed', 0.08, "Max forward/backward speed in m/s")
+        self.declare_parameter('max_angular_speed', 0.4, "Max turning speed in rad/s")
+        self.declare_parameter('standoff_distance_m', 0.05, "Target distance from marker for the 'touch'")
+        self.declare_parameter('disappearance_timeout_s', 1.0, "Time marker must be unseen to count as a touch")
 
-        while not self.touch_confirm_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Marker Touched Service not available, Trying Again...")
+        # --- State Variables ---
+        self.state = VisualServoingState.IDLE
+        self.target_marker: Marker | None = None
+        self.disappearance_timer: rclpy.timer.Timer | None = None
 
-        self.relocalise_pointer_timer = self.create_timer(1.0 / self.relocaliseFreq, self.localise_pointer)
-
-        # Subscriptions using the robust QoS profile
-        self.color_image_sub = self.create_subscription(CompressedImage, self.colourImageTopic, self.color_callback, camera_qos_profile)
-        # Subscribing to the depth topic expecting a CompressedImage
-        self.depth_image_sub = self.create_subscription(CompressedImage, self.depthImageTopic, self.depth_callback, camera_qos_profile)
-        self.camera_info_sub = self.create_subscription(CameraInfo, self.cameraInfoTopic, self.camera_info_callback, camera_qos_profile)
-
+        # --- ROS2 Communications ---
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.bridge = CvBridge()
 
-        self.debug_mask_pub = self.create_publisher(Image, '~/debug_mask', 10)
-        self.get_logger().info("Debug mask publisher created on topic '~/debug_mask'")
+        # Subscribes to the stream of detected markers from aruco_detector
+        self.marker_sub = self.create_subscription(
+            MarkerPointStamped,
+            "marker_position",
+            self.marker_callback,
+            10
+        )
 
-        # Local variables
-        self.marker_offset = None
-        self.state = VisualServoingState.ACTIVE if self.debugMode else VisualServoingState.IDLE 
-        self.color_image = None
-        self.depth_image = None
-        self.camera_info = None
-        self.get_logger().info("Visual Servoing Node has been initialized.")
-
-    def color_callback(self, msg):
-        np_arr = np.frombuffer(msg.data, np.uint8)
-        self.color_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    def depth_callback(self, msg):
-        # CORRECTED: Handles CompressedImage messages for depth data
-        np_arr = np.frombuffer(msg.data, np.uint8)
-        # Use IMREAD_UNCHANGED to preserve the 16-bit depth data from the compressed stream
-        self.depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+        self.vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         
-        if self.depth_image is None:
-            self.get_logger().warn("Failed to decode compressed depth image")
+        self.touch_confirm_client = self.create_client(MarkerConfirmation, "touched_marker")
+        while not self.touch_confirm_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("'touched_marker' service not available, trying again...")
 
-    def camera_info_callback(self, msg):
-        self.camera_info = msg
+        self.get_logger().info("Visual Servoing Node (Touch by Disappearance) Initialized.")
 
-    def localise_pointer(self):
-        if self.color_image is None or self.depth_image is None or self.camera_info is None:
-            return 
+    def marker_callback(self, msg: MarkerPointStamped):
+        # If idle, acquire the first seen marker as a new target
+        if self.state == VisualServoingState.IDLE:
+            self.state = VisualServoingState.APPROACHING
+            self.target_marker = msg.marker
+            self.get_logger().info(f"New target acquired: Marker ID {self.target_marker.id}. Starting approach.")
+
+        # If we are approaching, only act on messages for our target marker
+        if self.state == VisualServoingState.APPROACHING and self.target_marker is not None:
+            if msg.marker.id == self.target_marker.id:
+                # We see our target. Reset the disappearance timer.
+                self.reset_disappearance_timer()
+                
+                # Move towards the marker
+                self.move_towards_marker(msg)
+
+    def move_towards_marker(self, marker_msg: MarkerPointStamped):
+        try:
+            # We want the marker's position relative to the robot's center (base_link)
+            marker_frame = f"aruco_{marker_msg.marker.id}"
+            transform = self.tf_buffer.lookup_transform('base_link', marker_frame, rclpy.time.Time())
+            
+            # The error is the difference between where the marker is and where we want it to be
+            # We want it to be at x=standoff_distance, y=0
+            error_x = transform.transform.translation.x - self.get_parameter('standoff_distance_m').value
+            error_y = transform.transform.translation.y
+            
+            # P-Controller for Movement
+            linear_vel = self.get_parameter('k_p_linear').value * error_x
+            angular_vel = self.get_parameter('k_p_angular').value * error_y
+            
+            # Clamp velocities to safe maximums
+            linear_vel = max(min(linear_vel, self.get_parameter('max_linear_speed').value), -self.get_parameter('max_linear_speed').value)
+            angular_vel = max(min(angular_vel, self.get_parameter('max_angular_speed').value), -self.get_parameter('max_angular_speed').value)
+
+            cmd = Twist()
+            cmd.linear.x = linear_vel
+            cmd.angular.z = angular_vel
+            self.vel_pub.publish(cmd)
+
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            # This can happen if the marker is briefly out of view
+            self.get_logger().warn(f"Could not get transform for target marker {self.target_marker.id}: {e}")
+
+    def reset_disappearance_timer(self):
+        # If a timer is already running, cancel it
+        if self.disappearance_timer is not None:
+            self.disappearance_timer.cancel()
         
-        # Check if depth image is color (3 channels) or raw (2 dimensions)
-        if len(self.depth_image.shape) > 2:
-            self.get_logger().error("Depth image appears to be a color image, not raw depth data! Cannot proceed.")
-            return
+        # Create a new one-shot timer. If it ever fires, it means we lost the marker.
+        timeout = self.get_parameter('disappearance_timeout_s').value
+        self.disappearance_timer = self.create_timer(timeout, self.handle_touch)
 
-        hsv = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2HSV)
+    def handle_touch(self):
+        # This function is ONLY called if the timer fires, meaning the marker disappeared.
+        self.get_logger().info(f"MARKER TOUCHED: Target marker {self.target_marker.id} disappeared, assuming contact.")
         
-        lower_orange = np.array([0, 70, 70])
-        upper_orange = np.array([35, 255, 255])
+        # Stop the robot
+        self.vel_pub.publish(Twist())
         
-        mask = cv2.inRange(hsv, lower_orange, upper_orange)
-
-        try:
-            debug_msg = self.bridge.cv2_to_imgmsg(mask, encoding="mono8")
-            self.debug_mask_pub.publish(debug_msg)
-        except Exception as e:
-            self.get_logger().error(f"Failed to publish debug mask: {e}")
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours: return
-
-        largest = max(contours, key=cv2.contourArea)
-        M = cv2.moments(largest)
-        if M["m00"] == 0: return
-
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
-
-        depth_mm = self.depth_image[cy, cx]
-        if depth_mm == 0:
-            self.get_logger().warn("Pointer tip has no depth data, may be too close/far from camera.")
-            return
-
-        depth_m = float(depth_mm) / 1000.0
-        self.get_logger().info(f"Pointer localized at depth: {depth_m:.2f}m")
-
-        fx = self.camera_info.k[0]
-        fy = self.camera_info.k[4]
-        cx_cam = self.camera_info.k[2]
-        cy_cam = self.camera_info.k[5]
-
-        x = (cx - cx_cam) * depth_m / fx
-        y = (cy - cy_cam) * depth_m / fy
-        z = depth_m
-
-        point = PointStamped(header=self.camera_info.header)
-        point.header.stamp = self.get_clock().now().to_msg()
-        point.point.x, point.point.y, point.point.z = x, y, z
-
-        try:
-            tf = self.tf_buffer.lookup_transform('base_link', point.header.frame_id, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
-            base_point = do_transform_point(point, tf)
-            self.marker_offset = { 'x': base_point.point.x, 'y': base_point.point.y, 'z': base_point.point.z }
-            self.get_logger().info(f"Successfully calculated pointer offset in base_link: {self.marker_offset}")
-        except Exception as e:
-            self.get_logger().error(f"TF transform failed while localizing pointer: {e}")
-
-    def marker_callback(self, msg):
-        if self.state == VisualServoingState.IDLE: return
-        if self.marker_offset is None:
-             self.get_logger().warn("Cannot servo: Pointer position has not been calculated yet.")
-             return
-        try:
-            transform = self.tf_buffer.lookup_transform('base_link', msg.header.frame_id, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.5))
-            pointstamped = PointStamped(header=msg.header, point=msg.point)
-            marker_in_base = do_transform_point(pointstamped, transform)
-        except Exception as e:
-            self.get_logger().warn(f'Could not transform marker to base_link: {e}')
-            return
-        error_x = marker_in_base.point.x - self.marker_offset['x']
-        error_y = marker_in_base.point.y - self.marker_offset['y']
-        if abs(error_x) < self.touchedDistanceTolerance and abs(error_y) < self.touchedDistanceTolerance:
-            self.get_logger().info('Pointer aligned with marker — stopping and confirming touch.')
-            self.vel_pub.publish(Twist())
-            srv_call = MarkerConfirmation.Request(marker=msg.marker)
-            self.touch_confirm_client.call_async(srv_call).add_done_callback(self.handle_service_future)
-            self.state = VisualServoingState.IDLE
-            return
-        cmd = Twist()
-        cmd.linear.x = self.baseVelocity * error_x
-        cmd.linear.y = self.baseVelocity * error_y
-        cmd.angular.z = -self.baseVelocity * marker_in_base.point.y
-        self.vel_pub.publish(cmd)
-
-    def handle_service_future(self, future):
-        try:
-            response = future.result()
-            if response:
-                self.get_logger().info(f"Marker Touch Service Result: {'Succeeded' if response.success else 'Failed'}")
-            else:
-                self.get_logger().error("Marker Touch Service returned Nothing")
-        except Exception as e:
-            self.get_logger().error(f"Marker Touch Service call failed: {e}")
+        # Call the confirmation service
+        if self.target_marker is not None:
+            req = MarkerConfirmation.Request()
+            req.marker = self.target_marker
+            self.touch_confirm_client.call_async(req)
+        
+        # Reset state to IDLE to look for a new target
+        self.state = VisualServoingState.IDLE
+        self.target_marker = None
+        if self.disappearance_timer is not None:
+            self.disappearance_timer.cancel()
+            self.disappearance_timer = None
 
 def main(args=None):
     rclpy.init(args=args)
