@@ -7,6 +7,14 @@ import os
 
 def generate_launch_description():
     return LaunchDescription([
+
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='static_cam_tf_pub',
+            arguments=['--x', '0.05', '--y', '0.0', '--z', '0.15', '--yaw', '0', '--pitch', '0', '--roll', '0', '--frame-id', 'base_link', '--child-frame-id', 'oak_rgb_camera_optical_frame'],
+        ),
+
         #launch visual servoing node
         Node(
             package='par_project_9',
@@ -18,7 +26,8 @@ def generate_launch_description():
                 {"touched_distance_tolerance": 0.05},
                 {"base_velocity": 0.25},
                 {"colour_image_topic": "/oak/rgb/image_raw/compressed"},
-                {"depth_image_topic": "/oak/rgb/image_raw/compressedDepth"},
+                # {"depth_image_topic": "/oak/rgb/image_raw/compressedDepth"},
+                {"depth_image_topic": "/oak/stereo/image_raw"},
                 {"info_topic": "/oak/rgb/camera_info"},
                 {"relocalise_pointer_freq": 5.0},
                 {"debug_mode": True},
@@ -33,7 +42,7 @@ def generate_launch_description():
             parameters=[
                 {"image_topic": "/oak/rgb/image_raw/compressed"}, # compressed!
                 {"info_topic":  "/oak/rgb/camera_info"},
-                {"aruco_dict":  "DICT_4X4_50"}, # ← matched family
+                {"aruco_dict":  "DICT_4X4_50"},
                 {"marker_size_m": 0.06},
                 {"publish_tf":  True},
             ],
