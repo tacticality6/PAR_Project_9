@@ -105,6 +105,7 @@ class VisualServoingNode(Node):
         self.get_logger().info("Visual Servoing Node has been initialized.")
 
     def color_callback(self, msg):
+        self.get_logger().info("--- Color callback received! ---")
         np_arr = np.frombuffer(msg.data, np.uint8)
         self.color_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
@@ -115,6 +116,7 @@ class VisualServoingNode(Node):
         # self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def depth_callback(self, msg):
+        self.get_logger().info("--- Depth callback received! ---")
         np_arr = np.frombuffer(msg.data, np.uint8)
         self.depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
         
@@ -129,6 +131,7 @@ class VisualServoingNode(Node):
     #         self.get_logger().error(f"Could not convert depth image: {e}")
 
     def camera_info_callback(self, msg):
+        self.get_logger().info("--- Info callback received! ---")
         self.camera_info = msg
 
 
