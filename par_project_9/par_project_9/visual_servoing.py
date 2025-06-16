@@ -149,7 +149,8 @@ class VisualServoingNode(Node):
 
         # Define orange color range in HSV
         hsv = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2HSV)
-        lower_orange = np.array([0, 100, 100])
+        
+        lower_orange = np.array([0, 70, 70])
         upper_orange = np.array([30, 255, 255])
 
         # lower_orange = np.array([5, 100, 100])
