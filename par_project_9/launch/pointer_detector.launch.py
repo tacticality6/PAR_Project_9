@@ -27,6 +27,12 @@ def generate_launch_description():
 
         Node(
             package='par_project_9',
+            executable='delivery_tracker',
+            name='delivery_tracking_node'
+        ),
+
+        Node(
+            package='par_project_9',
             executable='aruco_detector',
             name='aruco_detector'
         ),
