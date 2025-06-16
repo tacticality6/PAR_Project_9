@@ -6,7 +6,8 @@ from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
 from geometry_msgs.msg import PointStamped, Twist
 from sensor_msgs.msg import CameraInfo, CompressedImage
 from enum import Enum
-import cv2, numpy as np
+import cv2
+import numpy as np
 from cv_bridge import CvBridge
 from par_project_9_interfaces.srv import MarkerConfirmation
 from par_project_9_interfaces.msg import MarkerPointStamped
@@ -97,6 +98,13 @@ class VisualServoingNode(Node):
         self.camera_info = None
 
     def color_callback(self, msg):
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        self.color_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        if self.color_image is None:
+            self.get_logger().warn("Failed to decode compressed image in visual_servoing_node")
+            return
+
         self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def depth_callback(self, msg):
