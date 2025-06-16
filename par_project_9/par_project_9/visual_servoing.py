@@ -149,8 +149,11 @@ class VisualServoingNode(Node):
 
         # Define orange color range in HSV
         hsv = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2HSV)
-        lower_orange = np.array([5, 100, 100])
-        upper_orange = np.array([25, 255, 255])
+        lower_orange = np.array([0, 100, 100])
+        upper_orange = np.array([30, 255, 255])
+
+        # lower_orange = np.array([5, 100, 100])
+        # upper_orange = np.array([25, 255, 255])
         mask = cv2.inRange(hsv, lower_orange, upper_orange)
 
         # Find contours and centroid
