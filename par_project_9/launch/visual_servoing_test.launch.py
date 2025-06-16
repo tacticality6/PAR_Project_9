@@ -15,6 +15,12 @@ def generate_launch_description():
             arguments=['--x', '0.05', '--y', '0.0', '--z', '0.15', '--yaw', '0', '--pitch', '0', '--roll', '0', '--frame-id', 'base_link', '--child-frame-id', 'oak_rgb_camera_optical_frame'],
         ),
 
+        Node(
+            package='par_project_9',
+            executable='delivery_tracker',
+            name='delivery_tracking_node'
+        ),
+
         #launch visual servoing node
         Node(
             package='par_project_9',
