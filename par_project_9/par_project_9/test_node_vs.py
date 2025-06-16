@@ -24,6 +24,50 @@ class VisualServoingNode(Node):
         self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.05).get_parameter_value().double_value
         self.baseVelocity = self.declare_parameter("base_velocity", 0.25).get_parameter_value().double_value
         self.colourImageTopic = self.declare_parameter("colour_image_topic", "/oak/rgb/image_raw/compressed").get_parameter_value().string_value
+        self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/stereo/image_raw").get_parameter_value().string_value
+        self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
+        self.relocaliseFreq = self.declare_parameter("relocalise_pointer_freq", 5.0).get_parameter_value().double_value
+        self.debugMode = self.declare_parameter("debug_mode", False).get_parameter_value().bool_value
+        
+        # FINAL FIX: Creating a more robust QoS profile for camera data
+        # This profile uses BEST_EFFORT reliability, which is common for high-frequency sensor streams.
+        camera_qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            depth=10 
+        )
+
+        # ROS Communications
+        self.marker_position_sub = self.create_subscription(MarkerPointStamped, "marker_position", self.marker_callback, 10)
+        self.vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.touch_confirm_client = self.create_client(MarkerConfirmation, self.touchedMarkerServiceName)
+
+        while not self.touch_confirm_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Marker Touched Service not available, Trying Again...")
+
+        self.relocalise_pointer_timer = self.create_timer(1.0 / self.relocaliseFreq, self.localise_pointer)
+
+        # Applying the new QoS profile to all camera subscriptions
+        self.color_image_sub = self.create_subscription(CompressedImage, self.colourImageTopic, self.color_callback, camera_qos_profile)
+        self.depth_image_sub = self.create_subscription(Image, self.depthImageTopic, self.depth_callback, camera_qos_profile)
+        self.camera_info_sub = self.create_subscription(CameraInfo, self.cameraInfoTopic, self.camera_info_callback, camera_qos_profile)
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.bridge = CvBridge()
+
+        # Local variables
+        self.marker_offset = None
+        self.state = VisualServoingState.ACTIVE if self.debugMode else VisualServoingState.IDLE 
+        self.color_image = None
+        self.depth_image = None
+        self.camera_info = None
+        self.get_logger().info("Visual Servoing Node has been initialized.")
+        super().__init__("visual_servoing_node")
+        # Parameters
+        self.touchedMarkerServiceName = self.declare_parameter("touched_marker_service_name", "touched_marker").get_parameter_value().string_value
+        self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.05).get_parameter_value().double_value
+        self.baseVelocity = self.declare_parameter("base_velocity", 0.25).get_parameter_value().double_value
+        self.colourImageTopic = self.declare_parameter("colour_image_topic", "/oak/rgb/image_raw/compressed").get_parameter_value().string_value
         # Using the correct topic for raw numerical depth
         self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/stereo/image_raw").get_parameter_value().string_value
         self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
