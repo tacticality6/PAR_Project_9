@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from tf2_ros import Buffer, TransformListener
 from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
 from geometry_msgs.msg import PointStamped, Twist
-from sensor_msgs.msg import CameraInfo, CompressedImage
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image 
 from enum import Enum
 import cv2
 import numpy as np
