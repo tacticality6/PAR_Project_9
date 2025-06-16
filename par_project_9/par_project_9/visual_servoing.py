@@ -116,11 +116,22 @@ class VisualServoingNode(Node):
 
         # self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
+    # def depth_callback(self, msg):
+    #     try:
+    #         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+    #     except Exception as e:
+    #         self.get_logger().error(f"Could not convert depth image: {e}")
+
     def depth_callback(self, msg):
-        try:
-            self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-        except Exception as e:
-            self.get_logger().error(f"Could not convert depth image: {e}")
+        # Decompress the message manually from the data buffer
+        np_arr = np.frombuffer(msg.data, np.uint8)
+
+        self.depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+        
+        # Check if decoding was successful
+        if self.depth_image is None:
+            self.get_logger().warn("Failed to decode compressed depth image")
+            return
 
     def camera_info_callback(self, msg):
         # self.get_logger().info("--- Info callback received! ---")
