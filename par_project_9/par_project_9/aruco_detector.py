@@ -121,9 +121,12 @@ class ArucoDetector(Node):
         det_array.header = msg.header
 
         for i, marker_id in enumerate(ids.flatten()):
+
+            marker_id_np = int(marker_id)
+
             ## 1. Detection message
             det = Detection2D()
-            self.get_logger().info(f"Markers ID -> {marker_id} detected")
+            self.get_logger().info(f"Markers ID -> {marker_id_np} detected")
             
             oh = ObjectHypothesisWithPose()
             oh.hypothesis.class_id = str(marker_id)
