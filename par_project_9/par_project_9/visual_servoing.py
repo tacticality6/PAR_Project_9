@@ -24,7 +24,8 @@ class VisualServoingNode(Node):
         self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.05).get_parameter_value().double_value
         self.baseVelocity = self.declare_parameter("base_velocity", 0.25).get_parameter_value().double_value
         self.colourImageTopic = self.declare_parameter("colour_image_topic", "/oak/rgb/image_raw/compressed").get_parameter_value().string_value
-        self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/rgb/image_raw/compressedDepth").get_parameter_value().string_value
+        # self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/rgb/image_raw/compressedDepth").get_parameter_value().string_value
+        self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/stereo/image_raw").get_parameter_value().string_value
         self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
         self.relocaliseFreq = self.declare_parameter("relocalise_pointer_freq", 10.0).get_parameter_value().double_value
         self.debugMode = self.declare_parameter("debug_mode", False).get_parameter_value().bool_value
@@ -66,7 +67,7 @@ class VisualServoingNode(Node):
         )
 
         self.depth_image_sub = self.create_subscription(
-            CompressedImage,
+            Image,
             self.depthImageTopic,
             self.color_callback,
             # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
@@ -116,19 +117,10 @@ class VisualServoingNode(Node):
         # self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def depth_callback(self, msg):
-        # self.get_logger().info("--- Depth callback received! ---")
-        np_arr = np.frombuffer(msg.data, np.uint8)
-        self.depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
-        
-        if self.depth_image is None:
-            self.get_logger().warn("Failed to decode compressed depth image")
-            return
-
-    # def depth_callback(self, msg):
-    #     try:
-    #         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-    #     except Exception as e:
-    #         self.get_logger().error(f"Could not convert depth image: {e}")
+        try:
+            self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as e:
+            self.get_logger().error(f"Could not convert depth image: {e}")
 
     def camera_info_callback(self, msg):
         # self.get_logger().info("--- Info callback received! ---")
@@ -166,10 +158,13 @@ class VisualServoingNode(Node):
         cy = int(M["m01"] / M["m00"])
 
         # Get depth at centroid
-        depth = self.depth_image[cy, cx] / 1000.0  # convert mm to meters
+        # depth = self.depth_image[cy, cx] / 1000.0  # convert mm to meters
+        depth = self.depth_image[cy, cx]
         if depth == 0:
             self.get_logger().warn("No depth info at marker centroid.")
             return
+        
+        depth = float(depth)/1000.00
 
         # Intrinsics
         fx = self.camera_info.k[0]
