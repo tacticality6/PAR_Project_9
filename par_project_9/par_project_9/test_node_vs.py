@@ -90,8 +90,10 @@ class VisualServoingNode(Node):
             return
 
         hsv = cv2.cvtColor(self.color_image, cv2.COLOR_BGR2HSV)
-        lower_orange = np.array([0, 100, 100])
+        
+        lower_orange = np.array([0, 70, 70])
         upper_orange = np.array([30, 255, 255])
+        
         mask = cv2.inRange(hsv, lower_orange, upper_orange)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
