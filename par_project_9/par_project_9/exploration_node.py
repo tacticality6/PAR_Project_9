@@ -20,7 +20,7 @@ class ExplorationNode(Node):
         self.map_topic = self.declare_parameter("map_topic", "/map").get_parameter_value().string_value
         self.nav_action = self.declare_parameter("nav_action", "navigate_to_pose").get_parameter_value().string_value
         self.pose_topic = self.declare_parameter("pose_topic", "/odom").get_parameter_value().string_value
-        self.trigger_topic = self.declare_parameter("trigger_topic", "").get_parameter_value().string_value
+        self.trigger_topic = self.declare_parameter("trigger_topic", "/explore_trigger").get_parameter_value().string_value
         self.memory_duration = self.declare_parameter("memory_duration", 60.0).get_parameter_value().double_value
         self.explore_decision_freq = self.declare_parameter("explore_decision_freq", 2.0).get_parameter_value().double_value
         self.fov = self.declare_parameter("fov_radians", 1.0).get_parameter_value().double_value
@@ -77,7 +77,7 @@ class ExplorationNode(Node):
 
     
     def explore_tick(self):
-        if self.map is None or not self.nav_client.wait_for_server(timeout_sec=1.0):
+        if self.map is None or self.current_pose is None or not self.nav_client.wait_for_server(timeout_sec=1.0):
             return
         
         self.forget_old_walls()
@@ -102,12 +102,12 @@ class ExplorationNode(Node):
     def update_memory(self):
         now = self.get_clock().now().seconds_nanoseconds()[0]
 
-        _, _, yaw = euler_from_quaternion([
+        _, _, yaw = euler_from_quaternion(
             self.current_pose.pose.orientation.x,
             self.current_pose.pose.orientation.y,
             self.current_pose.pose.orientation.z,
             self.current_pose.pose.orientation.w
-        ])
+        )
 
         for angle in np.linspace(-self.fov/2, self.fov/2, num=20):
             theta = yaw + angle
@@ -126,6 +126,13 @@ class ExplorationNode(Node):
                 elif self.map.data[index] == -1:
                     break
 
+    def valid_map_index(self,x,y):
+        return 0 <= x < self.map.info.width and 0 <= y < self.map.info.height
+
+    def world_to_map(self,x,y):
+        mx = int((x - self.map.info.origin.position.x) / self.map.info.resolution)
+        my = int((y - self.map.info.origin.position.y) / self.map.info.resolution)
+        return mx, my
 
     def choose_next_goal(self):
         if self.map is None or self.current_pose is None:
