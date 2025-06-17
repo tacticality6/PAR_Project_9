@@ -4,7 +4,7 @@ from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Bool
 from collections import OrderedDict
@@ -35,7 +35,7 @@ class ExplorationNode(Node):
         )
         
         self.pose_sub = self.create_subscription(
-            PoseStamped, 
+            Odometry, 
             self.pose_topic, 
             self.pose_callback, 
             qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
