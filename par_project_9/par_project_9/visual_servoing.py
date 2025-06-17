@@ -190,7 +190,15 @@ class VisualServoingNode(Node):
         x = (cx - cx_cam) * depth / fx
         y = (cy - cy_cam) * depth / fy
         z = depth
-
+        #DEBUG
+        print(f"fx type: {type(fx)}")
+        print(f"fy type: {type(fy)}")
+        print(f"cx type: {type(cx)}")
+        print(f"cy type: {type(cy)}")
+        print(f"cx_cam type: {type(cx_cam)}")
+        print(f"cy_cam type: {type(cy_cam)}")
+        print(f"depth type: {type(depth)}")
+        #print(f"x type: {type(x)}")
         self.get_logger().info(f"Pointer in camera frame: ({x}, {y}, {z})")
 
         # Package into PointStamped
