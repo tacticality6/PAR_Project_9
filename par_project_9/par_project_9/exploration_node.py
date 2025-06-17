@@ -4,7 +4,7 @@ from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import Bool
 from collections import OrderedDict
@@ -19,7 +19,7 @@ class ExplorationNode(Node):
         #Parameters
         self.map_topic = self.declare_parameter("map_topic", "/map").get_parameter_value().string_value
         self.nav_action = self.declare_parameter("nav_action", "navigate_to_pose").get_parameter_value().string_value
-        self.pose_topic = self.declare_parameter("pose_topic", "/odom").get_parameter_value().string_value
+        self.pose_topic = self.declare_parameter("pose_topic", "/pose").get_parameter_value().string_value
         self.trigger_topic = self.declare_parameter("trigger_topic", "/explore_trigger").get_parameter_value().string_value
         self.memory_duration = self.declare_parameter("memory_duration", 60.0).get_parameter_value().double_value
         self.explore_decision_freq = self.declare_parameter("explore_decision_freq", 2.0).get_parameter_value().double_value
@@ -35,7 +35,7 @@ class ExplorationNode(Node):
         )
         
         self.pose_sub = self.create_subscription(
-            Odometry, 
+            PoseStamped, 
             self.pose_topic, 
             self.pose_callback, 
             qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
