@@ -590,9 +590,8 @@ class TaskPlanningNode(Node):
         if not available_deliveries:
             return None
         
-        # For now, just return the first available delivery
-        # TODO: Implement distance-based prioritization
-        return available_deliveries[0]
+        # Implement distance-based prioritization
+        return self._select_closest_delivery_target(available_deliveries)
 
     def _has_actionable_locations(self) -> bool:
         """Check if we have any actionable locations (needed deliveries)"""
@@ -662,6 +661,64 @@ class TaskPlanningNode(Node):
         self.get_logger().info(f"Sent navigation goal: ({x:.2f}, {y:.2f}) in {self.map_frame}")
 
     # === UTILITY METHODS ===
+    
+    def _get_robot_position(self) -> Optional[Tuple[float, float]]:
+        """Get the current robot position in the map frame"""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                self.base_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            
+            t = transform.transform.translation
+            return (t.x, t.y)
+            
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            self.get_logger().debug(f"Failed to get robot position: {e}")
+            return None
+    
+    def _calculate_distance(self, pos1: Tuple[float, float], pos2: Tuple[float, float]) -> float:
+        """Calculate Euclidean distance between two 2D positions"""
+        return ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)**0.5
+    
+    def _select_closest_delivery_target(self, available_deliveries: List[int]) -> int:
+        """Select the closest delivery target from available options"""
+        if len(available_deliveries) == 1:
+            return available_deliveries[0]
+        
+        robot_pos = self._get_robot_position()
+        if robot_pos is None:
+            self.get_logger().warn("Cannot get robot position for distance calculation, using first available delivery")
+            return available_deliveries[0]
+        
+        closest_marker = None
+        min_distance = float('inf')
+        
+        for marker_id in available_deliveries:
+            if marker_id not in self.known_locations:
+                continue
+                
+            location = self.known_locations[marker_id]
+            if location.position is None:
+                continue
+            
+            # Calculate distance to this delivery location
+            delivery_pos = (location.position[0], location.position[1])
+            distance = self._calculate_distance(robot_pos, delivery_pos)
+            
+            if distance < min_distance:
+                min_distance = distance
+                closest_marker = marker_id
+        
+        if closest_marker is not None:
+            item_name = self._get_item_name_for_destination(closest_marker)
+            self.get_logger().info(f"Selected closest delivery target: {item_name} (marker {closest_marker}) at distance {min_distance:.2f}m")
+            return closest_marker
+        else:
+            self.get_logger().warn("No delivery targets with valid positions, using first available")
+            return available_deliveries[0]
     
     def _get_item_name_for_destination(self, destination_id: int) -> str:
         """Get the item name for a given destination marker ID"""
