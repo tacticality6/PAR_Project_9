@@ -191,7 +191,7 @@ class VisualServoingNode(Node):
         y = (cy - cy_cam) * depth / fy
         z = depth
 
-        self.get_logger().info(f"Pointer in camera frame: ({x:.2f}, {y:.2f}, {z:.2f})")
+        self.get_logger().info(f"Pointer in camera frame: ({x}, {y}, {z})")
 
         # Package into PointStamped
         point = PointStamped()
