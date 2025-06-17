@@ -173,13 +173,13 @@ class VisualServoingNode(Node):
         cy = int(M["m01"] / M["m00"])
 
         # Get depth at centroid
-        # depth = self.depth_image[cy, cx] / 1000.0  # convert mm to meters
-        depth = self.depth_image[cy, cx]
-        if depth == 0:
-            self.get_logger().warn("No depth info at marker centroid.")
-            return
+        depth = self.depth_image[cy, cx] / 1000.0  # convert mm to meters
+        # depth = self.depth_image[cy, cx]
+        # if depth == 0:
+        #     self.get_logger().warn("No depth info at marker centroid.")
+        #     return
         
-        depth = float(depth)/1000.00
+        # depth = float(depth)/1000.00
 
         # Intrinsics
         fx = self.camera_info.k[0]
