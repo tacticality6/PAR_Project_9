@@ -260,10 +260,10 @@ class VisualServoingNode(Node):
 
         cmd = Twist()
         cmd.linear.x  = max(min(fwd_cmd,  0.15), -0.15)   # ±0.15 m/s
-        cmd.angular.z = max(min(turn_cmd, 0.70), -0.70)   # ±0.70 rad/s
+        # cmd.angular.z = max(min(turn_cmd, 0.70), -0.70)   # ±0.70 rad/s
 
         # For a mecanum/holonomic base, comment the line above and use:
-        # cmd.linear.y = max(min(0.8 * error_y, 0.15), -0.15)
+        cmd.linear.y = max(min(0.8 * error_y, 0.15), -0.15)
 
         self.vel_pub.publish(cmd)
 

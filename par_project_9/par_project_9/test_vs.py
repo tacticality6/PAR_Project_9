@@ -153,6 +153,16 @@ class VisualServoingNode(Node):
                 'y': base_point.point.y,
                 'z': base_point.point.z
             }
+
+            self.base_frame = self.declare_parameter("base_frame", "odom").get_parameter_value().string_value
+
+            # Then use:
+            transform = self.tf_buffer.lookup_transform(
+                self.base_frame,
+                msg.header.frame_id,
+                rclpy.time.Time())
+
+            
         except Exception as e:
             self.get_logger().error(f"TF transform failed: {e}")
 
@@ -162,7 +172,7 @@ class VisualServoingNode(Node):
 
         try:
             transform = self.tf_buffer.lookup_transform(
-                'base_link',
+                'odom',
                 msg.header.frame_id,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.5)
