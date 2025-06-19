@@ -59,6 +59,14 @@ class DeliveryTrackingNode(Node):
         self.packages_onboard = []
         self.completed_deliveries = []
 
+        self.get_logger().info(
+f"""
+Delivery Tracker Online!
+Publishing To:
+Packages Onboard     ---> {self.packageOnboardTopic}
+Deliveries Completed ---> {self.completedDeliveriesTopic} 
+        """)
+
     
     def touched_marker_callback(self, request, response):
         response.success = False
