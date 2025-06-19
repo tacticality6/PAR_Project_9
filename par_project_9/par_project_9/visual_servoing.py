@@ -262,7 +262,7 @@ class VisualServoingNode(Node):
         k_ang = 2.0          # rotation
 
         cmd = Twist()
-        cmd.linear.x  = max(min(k_lin * error_x,  0.15))   # clamp ±0.15 m/s
+        cmd.linear.x  = max(min(k_lin * error_x,  0.15) 0.15)   # clamp ±0.15 m/s
         cmd.angular.z = max(min(k_ang * error_y,  0.70), -0.70)   # clamp ±0.70 rad/s
         # cmd.linear.x = self.baseVelocity * error_x
         # cmd.linear.y = self.baseVelocity * error_y
