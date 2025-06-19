@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.action import ActionClient
 import json
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
@@ -14,6 +15,9 @@ from tf2_ros import LookupException, ConnectivityException, ExtrapolationExcepti
 from std_msgs.msg import String, Int32, Bool
 from geometry_msgs.msg import PoseStamped
 from vision_msgs.msg import Detection2DArray
+
+# Nav2 imports
+from nav2_msgs.action import NavigateToPose
 
 # Custom interfaces
 from par_project_9_interfaces.msg import Package, Packages, Marker, Delivery, Deliveries
@@ -173,6 +177,12 @@ class TaskPlanningNode(Node):
         self.marker_confirmation_client = self.create_client(
             MarkerConfirmation, "touched_marker"
         )
+
+        # === ACTION CLIENTS ===
+        # Nav2 action client for navigation
+        self.nav2_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.nav2_goal_handle = None
+        self.nav2_result_future = None
 
         # === TIMERS ===
         # Main decision loop timer
@@ -436,10 +446,39 @@ class TaskPlanningNode(Node):
                 self.transition_to_state(RobotState.PLANNING)
 
     def _handle_navigating_to_delivery_state(self, time_in_state: float):
-        """Handle navigation to delivery location"""
-        # Navigation progress is handled by navigation_status_callback
-        # This state waits for navigation completion
-        pass
+        """Handle navigation to delivery location using Nav2"""
+        # Check if we have an active navigation goal
+        if self.nav2_goal_handle is None:
+            self.get_logger().error("No active Nav2 goal handle in navigation state")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        # Check if we have a result future and if it's done
+        if self.nav2_result_future is not None:
+            if self.nav2_result_future.done():
+                try:
+                    result = self.nav2_result_future.result()
+                    if result is not None:
+                        self._handle_nav2_result(result)
+                    else:
+                        self.get_logger().error("Nav2 result is None")
+                        self.transition_to_state(RobotState.PLANNING)
+                except Exception as e:
+                    self.get_logger().error(f"Error getting Nav2 result: {e}")
+                    self.transition_to_state(RobotState.PLANNING)
+                return
+        
+        # Periodically log navigation progress
+        if int(time_in_state) % 5 == 0 and time_in_state > 0:
+            target_info = ""
+            if self.current_target_marker_id and self.current_target_item_id:
+                target_info = f" to {self.current_target_item_id} (marker {self.current_target_marker_id})"
+            self.get_logger().info(f"Navigation in progress{target_info} - {time_in_state:.1f}s elapsed")
+        
+        # Check if goal is still active
+        if not self.nav2_goal_handle.is_goal_active():
+            self.get_logger().warn("Nav2 goal is no longer active")
+            self.transition_to_state(RobotState.PLANNING)
 
     def _handle_delivering_state(self, time_in_state: float):
         """Handle delivery operation state"""
@@ -647,18 +686,106 @@ class TaskPlanningNode(Node):
         self.get_logger().info("Stopped exploration")
 
     def _send_navigation_goal(self, x: float, y: float):
-        """Send a navigation goal to the navigation system"""
-        goal_msg = PoseStamped()
-        goal_msg.header.frame_id = self.map_frame
-        goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.pose.position.x = x
-        goal_msg.pose.position.y = y
-        goal_msg.pose.position.z = 0.0
-        goal_msg.pose.orientation.w = 1.0  # Default orientation
+        """Send a navigation goal using Nav2 action client"""
+        # Wait for Nav2 action server to be available
+        if not self.nav2_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Nav2 action server not available")
+            self.transition_to_state(RobotState.PLANNING)
+            return
         
-        self.navigation_command_pub.publish(goal_msg)
-        self.current_navigation_goal = goal_msg
-        self.get_logger().info(f"Sent navigation goal: ({x:.2f}, {y:.2f}) in {self.map_frame}")
+        # Create Nav2 goal message
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = self.map_frame
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = x
+        goal_msg.pose.pose.position.y = y
+        goal_msg.pose.pose.position.z = 0.0
+        goal_msg.pose.pose.orientation.w = 1.0  # Default orientation
+        
+        # Store current navigation goal for reference
+        self.current_navigation_goal = goal_msg.pose
+        
+        # Send the goal
+        self.get_logger().info(f"Sending Nav2 navigation goal: ({x:.2f}, {y:.2f}) in {self.map_frame}")
+        send_goal_future = self.nav2_client.send_goal_async(goal_msg, feedback_callback=self._nav2_feedback_callback)
+        send_goal_future.add_done_callback(self._nav2_goal_response_callback)
+
+    # === NAV2 CALLBACK METHODS ===
+    
+    def _nav2_goal_response_callback(self, future):
+        """Handle Nav2 goal response"""
+        try:
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self.get_logger().error("Nav2 goal rejected")
+                self.transition_to_state(RobotState.PLANNING)
+                return
+            
+            self.get_logger().info("Nav2 goal accepted")
+            self.nav2_goal_handle = goal_handle
+            
+            # Get result future
+            self.nav2_result_future = goal_handle.get_result_async()
+            
+        except Exception as e:
+            self.get_logger().error(f"Exception in Nav2 goal response: {e}")
+            self.transition_to_state(RobotState.PLANNING)
+    
+    def _nav2_feedback_callback(self, feedback_msg):
+        """Handle Nav2 navigation feedback"""
+        feedback = feedback_msg.feedback
+        
+        # Log progress periodically (every few feedback messages)
+        if hasattr(self, '_feedback_counter'):
+            self._feedback_counter += 1
+        else:
+            self._feedback_counter = 0
+            
+        if self._feedback_counter % 20 == 0:  # Log every 20th feedback message
+            current_pose = feedback.current_pose.pose
+            distance_remaining = feedback.distance_remaining
+            self.get_logger().debug(
+                f"Nav2 feedback - Position: ({current_pose.position.x:.2f}, {current_pose.position.y:.2f}), "
+                f"Distance remaining: {distance_remaining:.2f}m"
+            )
+    
+    def _handle_nav2_result(self, result):
+        """Handle Nav2 navigation result"""
+        if result.result is None:
+            self.get_logger().error("Nav2 result is None")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+            
+        # Check the result status
+        from nav2_msgs.action import NavigateToPose
+        
+        if result.result == NavigateToPose.Result.SUCCEEDED:
+            self.get_logger().info("Nav2 navigation succeeded")
+            self._handle_navigation_success()
+        elif result.result == NavigateToPose.Result.CANCELED:
+            self.get_logger().warn("Nav2 navigation was canceled")
+            self.transition_to_state(RobotState.PLANNING)
+        elif result.result == NavigateToPose.Result.FAILED:
+            self.get_logger().warn("Nav2 navigation failed")
+            self._handle_navigation_failure()
+        else:
+            self.get_logger().warn(f"Nav2 navigation completed with unknown result: {result.result}")
+            self.transition_to_state(RobotState.PLANNING)
+        
+        # Clean up Nav2 handles
+        self.nav2_goal_handle = None
+        self.nav2_result_future = None
+    
+    def _nav2_cancel_callback(self, future):
+        """Handle Nav2 goal cancellation response"""
+        try:
+            cancel_response = future.result()
+            if cancel_response.return_code == cancel_response.ERROR_NONE:
+                self.get_logger().info("Nav2 goal successfully canceled")
+            else:
+                self.get_logger().warn(f"Nav2 goal cancellation failed with code: {cancel_response.return_code}")
+        except Exception as e:
+            self.get_logger().error(f"Exception in Nav2 cancel callback: {e}")
 
     # === UTILITY METHODS ===
     
@@ -775,6 +902,16 @@ class TaskPlanningNode(Node):
             self.current_target_item_id = None
             self.current_navigation_goal = None
             self.current_task_type = None
+            
+        # Cancel active Nav2 goal if transitioning away from navigation
+        if (old_state == RobotState.NAVIGATING_TO_DELIVERY and 
+            new_state != RobotState.NAVIGATING_TO_DELIVERY and
+            self.nav2_goal_handle is not None):
+            self.get_logger().info("Canceling active Nav2 goal due to state transition")
+            cancel_future = self.nav2_goal_handle.cancel_goal_async()
+            cancel_future.add_done_callback(self._nav2_cancel_callback)
+            self.nav2_goal_handle = None
+            self.nav2_result_future = None
 
     def publish_status(self):
         """Publish periodic status updates"""
