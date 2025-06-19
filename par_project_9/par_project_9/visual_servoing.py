@@ -133,9 +133,9 @@ class VisualServoingNode(Node):
 
 
     def localise_pointer(self):
-        self.get_logger().info("Localising pointer position...")
+        # self.get_logger().info("Localising pointer position...")
         if self.color_image is None or self.depth_image is None or self.camera_info is None:
-            self.get_logger().info("Waiting for camera data...")
+            # self.get_logger().info("Waiting for camera data...")
             return
         
         self.get_logger().info("Attempting to localise pointer position...")
@@ -233,6 +233,7 @@ class VisualServoingNode(Node):
         
         #calculate differential from marker and pointer
         try:
+            self.lo
             error_x = marker_in_base.point.x - self.marker_offset['x']
             error_y = marker_in_base.point.y - self.marker_offset['y']
             error_z = marker_in_base.point.z - self.marker_offset['z']
@@ -261,6 +262,7 @@ class VisualServoingNode(Node):
         k_lin = 0.8          # forward/back
         k_ang = 2.0          # rotation
 
+        self.get_logger().info(f"Robot moving towards marker.........")
         cmd = Twist()
         cmd.linear.x  = max(min(k_lin * error_x, 0.15), 0.15)# clamp ±0.15 m/s
         cmd.angular.z = max(min(k_ang * error_y,  0.70), -0.70)   # clamp ±0.70 rad/s
