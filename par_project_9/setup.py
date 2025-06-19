@@ -29,7 +29,7 @@ setup(
             f"delivery_tracker = {package_name}.delivery_tracker_node:main",
             f"visual_servoing = {package_name}.visual_servoing:main",
             # f"visual_servoing = {package_name}.test_node_vs:main",
-            f"pointer_detector = {package_name}.pointer_detector:main",
+            # f"pointer_detector = {package_name}.pointer_detector:main",
         ],
     },
 )
