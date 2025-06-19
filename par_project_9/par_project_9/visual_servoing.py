@@ -93,6 +93,9 @@ class VisualServoingNode(Node):
         #local variables
         self.marker_offset = {'x': 0.18, 'y': 0.0, 'z': 0.10}
         self.state = VisualServoingState.ACTIVE if self.debugMode else VisualServoingState.IDLE 
+        self.last_seen_stamp   = None   # rclpy.time.Time of most-recent detection
+        self.close_enough      = False  # True once error_x & error_y are inside tolerance
+        self.missing_timeout_s = 0.8    # tweak: how long marker can vanish before we call "touch"
         self.color_image = None
         self.depth_image = None
         self.camera_info = None
@@ -210,67 +213,60 @@ class VisualServoingNode(Node):
             self.get_logger().error(f"TF transform failed: {e}")
 
 
-    def marker_callback(self, msg):
+    def marker_callback(self, msg: MarkerPointStamped):
+        # Ignore if we’re not active
         if self.state == VisualServoingState.IDLE:
             return
-        
-        #transform marker to base_link
+
+        # ─── 1. Transform marker position into base_link ────────────────
         try:
-            # Transform marker point into robot base_link frame
             transform = self.tf_buffer.lookup_transform(
                 'base_link',
                 msg.header.frame_id,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.5)
             )
-            pointstamped = PointStamped()
-            pointstamped.header = msg.header
-            pointstamped.point = msg.point
-            marker_in_base = do_transform_point(pointstamped, transform)
+            p_base = do_transform_point(PointStamped(header=msg.header,
+                                                    point=msg.point),
+                                        transform)
         except Exception as e:
-            self.get_logger().warn(f'TF transform failed: {e}')
+            self.get_logger().warn(f"TF transform failed: {e}")
             return
-        
-        #calculate differential from marker and pointer
-        try:
-            self.lo
-            error_x = marker_in_base.point.x - self.marker_offset['x']
-            error_y = marker_in_base.point.y - self.marker_offset['y']
-            error_z = marker_in_base.point.z - self.marker_offset['z']
-        except Exception as e:
-            self.get_logger().warn(f'Differential Calculation Failed: {e}')
-            return
-        
-        
-        #PID loop
-        if abs(error_x) < self.touchedDistanceTolerance and abs(error_y) < self.touchedDistanceTolerance:
-            self.get_logger().info('Pointer aligned with marker — stopping.')
-            # self.publisher.publish(Twist())  # Zero velocity
-            self.vel_pub.publish(Twist())
-            
-            #publish completed marker and set state to idle
-            srv_call = MarkerConfirmation.Request()
-            srv_call.marker = msg.marker
-            
-            srv_future = self.touch_confirm_client.call_async(srv_call)
+
+        # ─── 2. Compute errors: marker minus pointer ────────────────────
+        error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
+        error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
+
+        # ─── 3. Touch window check ─────────────────────────────────────
+        if abs(error_x) < self.touchedDistanceTolerance and \
+        abs(error_y) < self.touchedDistanceTolerance:
+            self.get_logger().info("Pointer aligned with marker — stopping.")
+            self.vel_pub.publish(Twist())                    # hard stop
+
+            req = MarkerConfirmation.Request()
+            req.marker = msg.marker
+            future = self.touch_confirm_client.call_async(req)
+            future.add_done_callback(self.handle_service_future)
+
             self.state = VisualServoingState.IDLE
-            srv_future.add_done_callback(self.handle_service_future)
-
             return
-        
-        # Tunable proportional gains
-        k_lin = 0.8          # forward/back
-        k_ang = 2.0          # rotation
 
-        self.get_logger().info(f"Robot moving towards marker.........")
+        # ─── 4. Proportional controller (diff-drive by default) ────────
+        k_lin, k_ang = 0.8, 2.0
+
+        # If X-axis points *backward* on your robot, flip the sign:
+        fwd_cmd  =  k_lin * (-error_x)      # tag ahead → positive speed
+        turn_cmd =  k_ang *   error_y       # tag left  → turn left (CCW)
+
         cmd = Twist()
-        cmd.linear.x  = max(min(k_lin * error_x, 0.15), 0.15)# clamp ±0.15 m/s
-        cmd.angular.z = max(min(k_ang * error_y,  0.70), -0.70)   # clamp ±0.70 rad/s
-        # cmd.linear.x = self.baseVelocity * error_x
-        # cmd.linear.y = self.baseVelocity * error_y
-        # cmd.angular.z = -self.baseVelocity * marker_in_base.point.x  # turn toward marker
+        cmd.linear.x  = max(min(fwd_cmd,  0.15), -0.15)   # ±0.15 m/s
+        cmd.angular.z = max(min(turn_cmd, 0.70), -0.70)   # ±0.70 rad/s
+
+        # For a mecanum/holonomic base, comment the line above and use:
+        # cmd.linear.y = max(min(0.8 * error_y, 0.15), -0.15)
 
         self.vel_pub.publish(cmd)
+
     
 
     def handle_service_future(self, future):
