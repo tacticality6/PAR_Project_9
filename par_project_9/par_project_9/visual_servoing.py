@@ -111,7 +111,7 @@ class VisualServoingNode(Node):
 
     def depth_callback(self, msg):
         try:
-            self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.depth_image = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding='passthrough')
         except Exception as e:
             self.get_logger().error(f"Could not convert depth image: {e}")
 
