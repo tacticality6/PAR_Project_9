@@ -62,16 +62,8 @@ class VisualServoingNode(Node):
             CompressedImage,
             self.colourImageTopic,
             self.color_callback,
-            # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-            qos_profile_sensor_data
-        )
-
-        self.depth_image_sub = self.create_subscription(
-            CompressedImage,
-            self.depthImageTopic,
-            self.depth_callback,
-            # qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-            qos_profile_sensor_data
+            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            # qos_profile_sensor_data
         )
 
         self.camera_info_sub = self.create_subscription(
