@@ -176,43 +176,84 @@ class VisualServoingNode(Node):
             self.state = State.RECOVERY
             self.recovery_move()
 
+    # def approach_marker(self, marker):
+    #     """PID-controlled approach to marker (FIXED VERSION)"""
+    #     if self.emergency_stop:
+    #         return
+        
+    #     cmd = Twist()
+    
+    #     # Get marker position in base frame
+    #     x = marker.point.x  # Forward/backward relative to robot
+    #     y = marker.point.y  # Left/right relative to robot
+    
+    #     # Calculate distance and angle to marker
+    #     distance = np.sqrt(x**2 + y**2)
+    #     angle = np.arctan2(y, x)  # Angle relative to robot's forward
+    
+    #     # Only move forward if marker is in front (±60 degrees)
+    #     if abs(angle) < np.radians(60):  # 60 degree forward cone
+    #         # Linear control (always move forward toward marker)
+    #         self.linear_pid.setpoint = self.get_parameter('stop_distance').value
+    #         cmd.linear.x = np.clip(
+    #             self.linear_pid(distance),
+    #             0.0,  # Minimum speed (always forward)
+    #             self.get_parameter('linear_speed').value
+    #         )
+        
+    #         # Angular control (center marker)
+    #         self.angular_pid.setpoint = 0
+    #         cmd.angular.z = np.clip(
+    #             self.angular_pid(y),  # Use y-error for steering
+    #             -self.get_parameter('angular_speed').value,
+    #             self.get_parameter('angular_speed').value
+    #         )
+    #     else:
+    #         # Rotate to face marker first
+    #         cmd.angular.z = 0.3 if y > 0 else -0.3
+        
+    #     self.get_logger().info("Aligning to marker...", throttle_duration_sec=1.0)
+    
+    #     self.cmd_vel_pub.publish(cmd)
+
     def approach_marker(self, marker):
-        """PID-controlled approach to marker (FIXED VERSION)"""
+        """PID-controlled approach with balanced forward/angular movement"""
         if self.emergency_stop:
             return
         
         cmd = Twist()
     
         # Get marker position in base frame
-        x = marker.point.x  # Forward/backward relative to robot
-        y = marker.point.y  # Left/right relative to robot
+        x = marker.point.x  # Forward distance (always positive)
+        y = marker.point.y  # Lateral offset
     
-        # Calculate distance and angle to marker
+        # Calculate absolute distance
         distance = np.sqrt(x**2 + y**2)
-        angle = np.arctan2(y, x)  # Angle relative to robot's forward
     
-        # Only move forward if marker is in front (±60 degrees)
-        if abs(angle) < np.radians(60):  # 60 degree forward cone
-            # Linear control (always move forward toward marker)
-            self.linear_pid.setpoint = self.get_parameter('stop_distance').value
-            cmd.linear.x = np.clip(
+        # Only proceed if marker is in front (x > 0)
+        if x > 0:
+            # 1. Forward motion (scaled by distance and x-component)
+            forward_speed = min(
                 self.linear_pid(distance),
-                0.0,  # Minimum speed (always forward)
                 self.get_parameter('linear_speed').value
             )
+            cmd.linear.x = forward_speed * (x / distance)  # Scale by forward component
         
-            # Angular control (center marker)
-            self.angular_pid.setpoint = 0
+            # 2. Angular correction (reduced gain when far away)
+            angular_gain = 0.5 if distance > 1.0 else 1.0  # Reduce turning when far
             cmd.angular.z = np.clip(
-                self.angular_pid(y),  # Use y-error for steering
+                self.angular_pid(y) * angular_gain,
                 -self.get_parameter('angular_speed').value,
                 self.get_parameter('angular_speed').value
             )
-        else:
-            # Rotate to face marker first
-            cmd.angular.z = 0.3 if y > 0 else -0.3
         
-        self.get_logger().info("Aligning to marker...", throttle_duration_sec=1.0)
+            # 3. Minimum forward motion guarantee
+            if cmd.linear.x < 0.05:  # Always move at least 5cm/s forward
+                cmd.linear.x = 0.05
+        else:
+            # Pure rotation if marker is behind
+            cmd.angular.z = 0.3 if y > 0 else -0.3
+            self.get_logger().info("Marker behind - aligning first...", throttle_duration_sec=1.0)
     
         self.cmd_vel_pub.publish(cmd)
 
