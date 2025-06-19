@@ -32,7 +32,7 @@ def generate_launch_description():
                 {"touched_distance_tolerance": 0.05},
                 {"base_velocity": 0.25},
                 {"colour_image_topic": "/oak/rgb/image_raw/compressed"},
-                {"depth_image_topic": "/oak/stereo/image_raw/compressedDepth"},
+                {"depth_image_topic": "/oak/rgb/image_raw/compressedDepth"},
                 {"info_topic": "/oak/rgb/camera_info"},
                 {"relocalise_pointer_freq": 5.0},
                 {"debug_mode": True},
