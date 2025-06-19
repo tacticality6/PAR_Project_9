@@ -34,7 +34,7 @@ class VisualServoingNode(Node):
                 ('marker_timeout', 1.0),
                 ('recovery_duration', 3.0),
                 ('safety_distance', 0.15),
-                ('base_frame', 'base_link'),
+                ('base_frame', 'odom'),
                 ('odom_frame', 'odom'),
                 ('camera_frame', 'oak_rgb_camera_optical_frame'),
                 ('tf_timeout_sec', 5.0),
