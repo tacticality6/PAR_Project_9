@@ -214,7 +214,7 @@ class VisualServoingNode(Node):
         
         self.get_logger().info("Aligning to marker...", throttle_duration_sec=1.0)
     
-    self.cmd_vel_pub.publish(cmd)
+        self.cmd_vel_pub.publish(cmd)
 
     def stop_robot(self):
         """Stop all motion"""
