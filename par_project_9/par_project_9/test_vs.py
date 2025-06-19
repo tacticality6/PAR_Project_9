@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -10,7 +12,7 @@ import math
 class VisualServoingState(Enum):
     IDLE = 0          # Waiting for target marker
     APPROACHING = 1   # Moving toward marker
-    TOUCHED = 2       # Successfully reached marker
+    TOUCHED = 2       # Successfully reached marker (25cm)
 
 
 class VisualServoingNode(Node):
@@ -18,18 +20,15 @@ class VisualServoingNode(Node):
         super().__init__("visual_servoing_node")
 
         # Parameters
-        self.base_velocity = self.declare_parameter(
-            "base_velocity", 0.25).get_parameter_value().double_value
-        self.stop_distance = self.declare_parameter(
-            "stop_distance", 0.3).get_parameter_value().double_value  # meters
-        self.slowdown_distance = self.declare_parameter(
-            "slowdown_distance", 1.0).get_parameter_value().double_value  # meters
+        self.declare_parameter("base_velocity", 0.25)  # m/s
+        self.declare_parameter("stop_distance", 0.25)  # 25cm in meters
+        self.declare_parameter("angular_gain", 0.5)    # For turning correction
 
         # Publishers
         self.vel_pub = self.create_publisher(
             Twist,
             "/cmd_vel",
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         )
 
         # Subscriptions
@@ -37,64 +36,60 @@ class VisualServoingNode(Node):
             MarkerPointStamped,
             "marker_position",
             self.marker_callback,
-            qos_profile=QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            10
         )
 
-        # State
+        # State variables
         self.state = VisualServoingState.IDLE
         self.current_marker = None
-        self.get_logger().info("Distance-based Visual Servoing Node initialized.")
 
-    def marker_callback(self, msg: MarkerPointStamped):
-        if self.state == VisualServoingState.TOUCHED:
-            return
+        self.get_logger().info("Visual Servoing Node initialized - will stop at 25cm")
 
-        # Calculate distance to marker (Euclidean distance)
-        marker_distance = math.sqrt(msg.point.x**2 + msg.point.y**2)
-        
-        if self.state == VisualServoingState.IDLE:
-            # New marker detected - start approaching
-            self.current_marker = msg.marker
-            self.state = VisualServoingState.APPROACHING
-            self.get_logger().info(
-                f"New marker detected (ID: {msg.marker.id}). Distance: {marker_distance:.2f}m. Starting approach.")
-        
-        elif self.state == VisualServoingState.APPROACHING:
-            # Continue approaching or stop if close enough
-            if marker_distance <= self.stop_distance:
-                # Reached the marker
-                self.stop_robot()
-                self.state = VisualServoingState.TOUCHED
-                self.get_logger().info(
-                    f"Marker touched! (ID: {msg.marker.id}). Ready for next marker.")
-                # Reset after a short delay to find next marker
-                self.create_timer(2.0, self.reset_state)
-            else:
-                # Continue approaching with speed adjustment
-                self.approach_marker(marker_distance)
+    def marker_callback(self, msg):
+        try:
+            # Get current parameters
+            base_velocity = self.get_parameter("base_velocity").value
+            stop_distance = self.get_parameter("stop_distance").value
+            angular_gain = self.get_parameter("angular_gain").value
 
-    def approach_marker(self, distance):
-        cmd = Twist()
-        
-        # Slow down as we get closer to the marker
-        if distance < self.slowdown_distance:
-            # Linear interpolation between base_velocity and 0
-            speed = self.base_velocity * (distance - self.stop_distance) / (
-                self.slowdown_distance - self.stop_distance)
-            cmd.linear.x = max(speed, 0.05)  # Minimum speed to keep moving
-        else:
-            cmd.linear.x = self.base_velocity
-            
-        self.vel_pub.publish(cmd)
+            # Calculate distance and angle to marker
+            distance = math.sqrt(msg.point.x**2 + msg.point.y**2)
+            angle = math.atan2(msg.point.y, msg.point.x)  # Angle from robot center to marker
+
+            if self.state == VisualServoingState.IDLE:
+                # New marker detected - start approaching
+                self.current_marker = msg.marker
+                self.state = VisualServoingState.APPROACHING
+                self.get_logger().info(f"Approaching marker ID {msg.marker.id} at {distance:.2f}m")
+
+            elif self.state == VisualServoingState.APPROACHING:
+                if distance <= stop_distance:
+                    # Reached target distance
+                    self.stop_robot()
+                    self.state = VisualServoingState.TOUCHED
+                    self.get_logger().info(f"Reached marker (distance: {distance:.2f}m)")
+                    # Reset after delay to find next marker
+                    self.create_timer(2.0, self.reset_state)
+                else:
+                    # Move toward marker with heading correction
+                    cmd = Twist()
+                    cmd.linear.x = base_velocity
+                    cmd.angular.z = angular_gain * angle  # Correct heading toward marker
+                    self.vel_pub.publish(cmd)
+
+        except Exception as e:
+            self.get_logger().error(f"Error in marker callback: {str(e)}")
 
     def stop_robot(self):
+        """Stop all robot movement"""
         cmd = Twist()  # All zeros
         self.vel_pub.publish(cmd)
 
     def reset_state(self):
+        """Return to IDLE state after reaching marker"""
         self.state = VisualServoingState.IDLE
         self.current_marker = None
-        self.get_logger().info("Ready to detect next marker.")
+        self.get_logger().info("Ready for next marker")
 
 
 def main(args=None):
