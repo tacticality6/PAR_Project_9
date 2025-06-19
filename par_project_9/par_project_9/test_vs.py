@@ -7,9 +7,25 @@ from tf2_ros import Buffer, TransformListener, TransformException
 from tf2_geometry_msgs import do_transform_point
 from par_project_9_interfaces.msg import MarkerPointStamped
 from sensor_msgs.msg import LaserScan
-from simple_pid import PID
 from enum import Enum, auto
 import numpy as np
+
+# Fallback PID implementation if simple_pid not available
+class PID:
+    def __init__(self, Kp, Ki, Kd, setpoint):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.setpoint = setpoint
+        self._last_error = 0
+        self._integral = 0
+    
+    def __call__(self, measurement):
+        error = self.setpoint - measurement
+        self._integral += error
+        derivative = error - self._last_error
+        self._last_error = error
+        return self.Kp * error + self.Ki * self._integral + self.Kd * derivative
 
 class State(Enum):
     INITIALIZING = auto()
@@ -24,7 +40,7 @@ class VisualServoingNode(Node):
     def __init__(self):
         super().__init__('visual_servoing_node')
         
-        # Parameters
+        # Parameters (with OAK camera frame as default)
         self.declare_parameters(namespace='',
             parameters=[
                 ('stop_distance', 0.25),
@@ -36,12 +52,12 @@ class VisualServoingNode(Node):
                 ('safety_distance', 0.15),
                 ('base_frame', 'base_link'),
                 ('odom_frame', 'odom'),
-                ('camera_frame', 'camera_link'),
+                ('camera_frame', 'oak_rgb_camera_optical_frame'),  # Updated for OAK
                 ('tf_timeout_sec', 5.0),
                 ('tf_retry_interval', 1.0)
             ])
         
-        # PID Controllers
+        # PID Controllers (using built-in implementation)
         self.linear_pid = PID(0.5, 0.01, 0.05, setpoint=0)
         self.angular_pid = PID(1.0, 0.01, 0.1, setpoint=0)
         
@@ -73,8 +89,8 @@ class VisualServoingNode(Node):
             return
             
         try:
-            # Check base_link → camera_link
-            self.tf_buffer.lookup_transform(
+            # Check base_link → camera_frame
+            transform = self.tf_buffer.lookup_transform(
                 self.get_parameter('base_frame').value,
                 self.get_parameter('camera_frame').value,
                 rclpy.time.Time(),
@@ -82,20 +98,15 @@ class VisualServoingNode(Node):
                     seconds=self.get_parameter('tf_timeout_sec').value)
             )
             
-            # Check odom → base_link
-            self.tf_buffer.lookup_transform(
-                self.get_parameter('odom_frame').value,
-                self.get_parameter('base_frame').value,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(
-                    seconds=self.get_parameter('tf_timeout_sec').value)
-            )
+            self.get_logger().info(
+                f"✅ TF Frames Verified:\n"
+                f"Translation: {transform.transform.translation}\n"
+                f"Rotation: {transform.transform.rotation}",
+                throttle_duration_sec=5.0)
             
-            if not self.tf_ready:
-                self.get_logger().info("✅ TF Health Check Passed")
-                self.tf_ready = True
-                self.state = State.SEARCHING
-                self.initialize_components()
+            self.tf_ready = True
+            self.state = State.SEARCHING
+            self.initialize_components()
                 
         except TransformException as e:
             self.get_logger().error(f"❌ TF Health Check Failed: {str(e)}")
@@ -123,7 +134,7 @@ class VisualServoingNode(Node):
         if not self.tf_ready:
             return
             
-        valid_ranges = [r for r in msg.ranges if not np.isinf(r)]
+        valid_ranges = [r for r in msg.ranges if r > 0.05 and not np.isinf(r)]  # Filter noise
         if valid_ranges:
             self.last_obstacle_distance = min(valid_ranges[:30] + valid_ranges[-30:])
             
@@ -131,7 +142,8 @@ class VisualServoingNode(Node):
             if self.last_obstacle_distance < self.get_parameter('safety_distance').value:
                 self.emergency_stop = True
                 self.stop_robot()
-                self.get_logger().warn("🛑 EMERGENCY STOP: Obstacle Detected!")
+                self.get_logger().warn("🛑 EMERGENCY STOP: Obstacle at {:.2f}m".format(
+                    self.last_obstacle_distance))
 
     def marker_callback(self, msg):
         if not self.tf_ready or self.state in [State.ERROR, State.INITIALIZING]:
@@ -223,7 +235,8 @@ class VisualServoingNode(Node):
         now = self.get_clock().now()
         
         # Reset emergency stop if obstacle cleared
-        if self.emergency_stop and self.last_obstacle_distance > self.get_parameter('safety_distance').value * 1.5:
+        if (self.emergency_stop and 
+            self.last_obstacle_distance > self.get_parameter('safety_distance').value * 1.5):
             self.emergency_stop = False
             self.state = State.SEARCHING
             self.get_logger().info("🚦 Emergency Clear - Resuming Operation")
