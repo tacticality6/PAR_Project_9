@@ -9,23 +9,7 @@ from par_project_9_interfaces.msg import MarkerPointStamped
 from sensor_msgs.msg import LaserScan
 from enum import Enum, auto
 import numpy as np
-
-# Fallback PID implementation if simple_pid not available
-class PID:
-    def __init__(self, Kp, Ki, Kd, setpoint):
-        self.Kp = Kp
-        self.Ki = Ki
-        self.Kd = Kd
-        self.setpoint = setpoint
-        self._last_error = 0
-        self._integral = 0
-    
-    def __call__(self, measurement):
-        error = self.setpoint - measurement
-        self._integral += error
-        derivative = error - self._last_error
-        self._last_error = error
-        return self.Kp * error + self.Ki * self._integral + self.Kd * derivative
+import math
 
 class State(Enum):
     INITIALIZING = auto()
@@ -40,26 +24,23 @@ class VisualServoingNode(Node):
     def __init__(self):
         super().__init__('visual_servoing_node')
         
-        # Parameters (with OAK camera frame as default)
+        # Parameters
         self.declare_parameters(namespace='',
             parameters=[
                 ('stop_distance', 0.25),
-                ('linear_speed', 0.15),
-                ('angular_speed', 0.5),
+                ('linear_speed', 0.2),  # Increased default speed
+                ('angular_speed', 0.4),  # Reduced for smoother turns
                 ('turn_duration', 2.0),
                 ('marker_timeout', 1.0),
                 ('recovery_duration', 3.0),
                 ('safety_distance', 0.15),
                 ('base_frame', 'base_link'),
                 ('odom_frame', 'odom'),
-                ('camera_frame', 'oak_rgb_camera_optical_frame'),  # Updated for OAK
+                ('camera_frame', 'oak_rgb_camera_optical_frame'),
                 ('tf_timeout_sec', 5.0),
-                ('tf_retry_interval', 1.0)
+                ('tf_retry_interval', 1.0),
+                ('approach_angle_threshold', 30.0)  # Degrees for front cone
             ])
-        
-        # PID Controllers (using built-in implementation)
-        self.linear_pid = PID(0.5, 0.01, 0.05, setpoint=0)
-        self.angular_pid = PID(1.0, 0.01, 0.1, setpoint=0)
         
         # State machine
         self.state = State.INITIALIZING
@@ -90,7 +71,7 @@ class VisualServoingNode(Node):
             
         try:
             # Check base_link → camera_frame
-            transform = self.tf_buffer.lookup_transform(
+            self.tf_buffer.lookup_transform(
                 self.get_parameter('base_frame').value,
                 self.get_parameter('camera_frame').value,
                 rclpy.time.Time(),
@@ -98,15 +79,10 @@ class VisualServoingNode(Node):
                     seconds=self.get_parameter('tf_timeout_sec').value)
             )
             
-            self.get_logger().info(
-                f"✅ TF Frames Verified:\n"
-                f"Translation: {transform.transform.translation}\n"
-                f"Rotation: {transform.transform.rotation}",
-                throttle_duration_sec=5.0)
-            
             self.tf_ready = True
             self.state = State.SEARCHING
             self.initialize_components()
+            self.get_logger().info("✅ TF frames verified - Ready to operate")
                 
         except TransformException as e:
             self.get_logger().error(f"❌ TF Health Check Failed: {str(e)}")
@@ -126,19 +102,16 @@ class VisualServoingNode(Node):
         self.laser_sub = self.create_subscription(
             LaserScan, '/scan', self.laser_callback, QoSProfile(
                 depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
-        
-        self.get_logger().info("🔄 Components Initialized - Ready for Operation")
 
     def laser_callback(self, msg):
         """Process LiDAR data for obstacle detection"""
         if not self.tf_ready:
             return
             
-        valid_ranges = [r for r in msg.ranges if r > 0.05 and not np.isinf(r)]  # Filter noise
+        valid_ranges = [r for r in msg.ranges if r > 0.05 and not np.isinf(r)]
         if valid_ranges:
             self.last_obstacle_distance = min(valid_ranges[:30] + valid_ranges[-30:])
             
-            # Emergency stop if too close
             if self.last_obstacle_distance < self.get_parameter('safety_distance').value:
                 self.emergency_stop = True
                 self.stop_robot()
@@ -159,7 +132,7 @@ class VisualServoingNode(Node):
                 PointStamped(header=msg.header, point=msg.point),
                 transform)
                 
-            distance = np.sqrt(marker_in_base.point.x**2 + marker_in_base.point.y**2)
+            distance = math.sqrt(marker_in_base.point.x**2 + marker_in_base.point.y**2)
             
             if distance > self.get_parameter('stop_distance').value:
                 self.state = State.APPROACHING
@@ -176,94 +149,53 @@ class VisualServoingNode(Node):
             self.state = State.RECOVERY
             self.recovery_move()
 
-    # def approach_marker(self, marker):
-    #     """PID-controlled approach to marker (FIXED VERSION)"""
-    #     if self.emergency_stop:
-    #         return
-        
-    #     cmd = Twist()
-    
-    #     # Get marker position in base frame
-    #     x = marker.point.x  # Forward/backward relative to robot
-    #     y = marker.point.y  # Left/right relative to robot
-    
-    #     # Calculate distance and angle to marker
-    #     distance = np.sqrt(x**2 + y**2)
-    #     angle = np.arctan2(y, x)  # Angle relative to robot's forward
-    
-    #     # Only move forward if marker is in front (±60 degrees)
-    #     if abs(angle) < np.radians(60):  # 60 degree forward cone
-    #         # Linear control (always move forward toward marker)
-    #         self.linear_pid.setpoint = self.get_parameter('stop_distance').value
-    #         cmd.linear.x = np.clip(
-    #             self.linear_pid(distance),
-    #             0.0,  # Minimum speed (always forward)
-    #             self.get_parameter('linear_speed').value
-    #         )
-        
-    #         # Angular control (center marker)
-    #         self.angular_pid.setpoint = 0
-    #         cmd.angular.z = np.clip(
-    #             self.angular_pid(y),  # Use y-error for steering
-    #             -self.get_parameter('angular_speed').value,
-    #             self.get_parameter('angular_speed').value
-    #         )
-    #     else:
-    #         # Rotate to face marker first
-    #         cmd.angular.z = 0.3 if y > 0 else -0.3
-        
-    #     self.get_logger().info("Aligning to marker...", throttle_duration_sec=1.0)
-    
-    #     self.cmd_vel_pub.publish(cmd)
-
     def approach_marker(self, marker):
-        """PID-controlled approach with balanced forward/angular movement"""
+        """Guaranteed forward motion with smooth steering"""
         if self.emergency_stop:
             return
-        
+            
         cmd = Twist()
-    
-        # Get marker position in base frame
-        x = marker.point.x  # Forward distance (always positive)
+        x = marker.point.x  # Forward distance
         y = marker.point.y  # Lateral offset
-    
-        # Calculate absolute distance
-        distance = np.sqrt(x**2 + y**2)
-    
-        # Only proceed if marker is in front (x > 0)
-        if x > 0:
-            # 1. Forward motion (scaled by distance and x-component)
+        distance = math.sqrt(x**2 + y**2)
+        angle = math.degrees(math.atan2(y, x))
+        
+        angle_threshold = self.get_parameter('approach_angle_threshold').value
+        
+        if abs(angle) > angle_threshold:
+            # Rotate to center marker
+            cmd.angular.z = 0.3 if angle > 0 else -0.3
+            self.get_logger().info(
+                "↻ Aligning to marker (angle: {:.1f}°)".format(angle),
+                throttle_duration_sec=1.0)
+        else:
+            # Move forward with steering
             forward_speed = min(
-                self.linear_pid(distance),
+                0.1 + 0.15 * (distance / 2.0),  # Dynamic speed scaling
                 self.get_parameter('linear_speed').value
             )
-            cmd.linear.x = forward_speed * (x / distance)  # Scale by forward component
-        
-            # 2. Angular correction (reduced gain when far away)
-            angular_gain = 0.5 if distance > 1.0 else 1.0  # Reduce turning when far
+            cmd.linear.x = forward_speed
+            
+            # Steering proportional to lateral error
+            steering = -0.5 * y  # Negative because camera y-axis is inverted
             cmd.angular.z = np.clip(
-                self.angular_pid(y) * angular_gain,
+                steering,
                 -self.get_parameter('angular_speed').value,
                 self.get_parameter('angular_speed').value
             )
+            
+            self.get_logger().info(
+                "↑ Moving forward: {:.2f}m/s | ↺ Steering: {:.2f}rad/s".format(
+                    forward_speed, cmd.angular.z),
+                throttle_duration_sec=0.5)
         
-            # 3. Minimum forward motion guarantee
-            if cmd.linear.x < 0.05:  # Always move at least 5cm/s forward
-                cmd.linear.x = 0.05
-        else:
-            # Pure rotation if marker is behind
-            cmd.angular.z = 0.3 if y > 0 else -0.3
-            self.get_logger().info("Marker behind - aligning first...", throttle_duration_sec=1.0)
-    
         self.cmd_vel_pub.publish(cmd)
 
     def stop_robot(self):
-        """Stop all motion"""
         cmd = Twist()
         self.cmd_vel_pub.publish(cmd)
 
     def search_for_marker(self):
-        """Rotate to search for markers"""
         if self.emergency_stop:
             return
             
@@ -272,18 +204,16 @@ class VisualServoingNode(Node):
         self.cmd_vel_pub.publish(cmd)
 
     def recovery_move(self):
-        """Move forward to regain marker detection"""
         if self.emergency_stop:
             return
             
         cmd = Twist()
-        cmd.linear.x = 0.1  # Slow forward
+        cmd.linear.x = 0.1
         self.cmd_vel_pub.publish(cmd)
         self.recovery_end_time = self.get_clock().now() + rclpy.time.Duration(
             seconds=self.get_parameter('recovery_duration').value)
 
     def update(self):
-        """Main state machine update"""
         if not self.tf_ready or self.state == State.ERROR:
             return
             
