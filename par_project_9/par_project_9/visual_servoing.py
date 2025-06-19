@@ -91,7 +91,7 @@ class VisualServoingNode(Node):
         self.bridge = CvBridge()
 
         #local variables
-        self.marker_offset = None
+        self.marker_offset = {'x': 0.18, 'y': 0.0, 'z': 0.10}
         self.state = VisualServoingState.ACTIVE if self.debugMode else VisualServoingState.IDLE 
         self.color_image = None
         self.depth_image = None
@@ -244,7 +244,8 @@ class VisualServoingNode(Node):
         #PID loop
         if abs(error_x) < self.touchedDistanceTolerance and abs(error_y) < self.touchedDistanceTolerance:
             self.get_logger().info('Pointer aligned with marker — stopping.')
-            self.publisher.publish(Twist())  # Zero velocity
+            # self.publisher.publish(Twist())  # Zero velocity
+            self.vel_pub.publish(Twist())
             
             #publish completed marker and set state to idle
             srv_call = MarkerConfirmation.Request()
@@ -256,11 +257,16 @@ class VisualServoingNode(Node):
 
             return
         
+        # Tunable proportional gains
+        k_lin = 0.8          # forward/back
+        k_ang = 2.0          # rotation
 
         cmd = Twist()
-        cmd.linear.x = self.baseVelocity * error_x
-        cmd.linear.y = self.baseVelocity * error_y
-        cmd.angular.z = -self.baseVelocity * marker_in_base.point.x  # turn toward marker
+        cmd.linear.x  = max(min(k_lin * error_x,  0.15), -0.15)   # clamp ±0.15 m/s
+        cmd.angular.z = max(min(k_ang * error_y,  0.70), -0.70)   # clamp ±0.70 rad/s
+        # cmd.linear.x = self.baseVelocity * error_x
+        # cmd.linear.y = self.baseVelocity * error_y
+        # cmd.angular.z = -self.baseVelocity * marker_in_base.point.x  # turn toward marker
 
         self.vel_pub.publish(cmd)
     

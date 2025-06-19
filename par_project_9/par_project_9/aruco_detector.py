@@ -164,8 +164,9 @@ class ArucoDetector(Node):
 
             # Publish marker position
             marker_pos = Point()
-            marker_pos.x = float(np.mean(corners[i][0][:, 0]))
-            marker_pos.y = float(np.mean(corners[i][0][:, 1]))
+            marker_pos.x = float(tvecs[i][0][0])   # metres – forward
+            marker_pos.y = float(tvecs[i][0][1])   # metres – left
+            marker_pos.z = float(tvecs[i][0][2])   # metres – up
             
             # ── publish a Marker.msg ───────────────────────────────────
             m = Marker()
