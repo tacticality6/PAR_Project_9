@@ -29,6 +29,8 @@ class VisualServoingNode(Node):
         self.cameraInfoTopic = self.declare_parameter("info_topic", "/oak/rgb/camera_info").get_parameter_value().string_value
         self.relocaliseFreq = self.declare_parameter("relocalise_pointer_freq", 10.0).get_parameter_value().double_value
         self.debugMode = self.declare_parameter("debug_mode", False).get_parameter_value().bool_value
+        self.targetLateralOffset = self.declare_parameter("target_lateral_offset", 0.0).get_parameter_value().double_value
+
 
         # ROS listeners / publishers
         self.marker_position_sub = self.create_subscription(
@@ -270,7 +272,7 @@ class VisualServoingNode(Node):
             # Target forward distance: 0.25 meters
             target_forward_distance = 0.25 # Stopping distance
             error_forward = p_base.point.z - target_forward_distance # Error in forward directiom
-            error_sideways = p_base.point.y # Error in side direction
+            error_sideways = p_base.point.y - self.targetLateralOffset # Error in side direction
 
             # Compute Euclidean distance from pointer tip to marker
             distance = (error_forward**2 + error_sideways**2)**0.5
