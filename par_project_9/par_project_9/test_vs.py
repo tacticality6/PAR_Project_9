@@ -21,6 +21,7 @@ class VisualServoingState(Enum):
 class VisualServoingNode(Node):
     def __init__(self):
         super().__init__("visual_servoing_node")
+        self.get_logger().info(f"Subscribed to: {self.marker_sub.topic_name}")
         
         # Parameters
         self.declare_parameters(namespace='',
@@ -96,6 +97,9 @@ class VisualServoingNode(Node):
         self.camera_info = msg
 
     def marker_callback(self, msg: MarkerPointStamped):
+
+        self.get_logger().info(f"Received marker at X={msg.point.x}, Y={msg.point.y}")
+
         current_time = self.get_clock().now()
         
         # Ignore if we're not active or marker is old
@@ -105,7 +109,7 @@ class VisualServoingNode(Node):
         # Transform marker position to base_link frame
         try:
             transform = self.tf_buffer.lookup_transform(
-                'base_link',
+                'odom',
                 msg.header.frame_id,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.5))
