@@ -307,6 +307,7 @@ class VisualServoingNode(Node):
             if distance <= self.touchedDistanceTolerance:
                 # self.get_logger().info(f"Reached marker (within {self.touchedDistanceTolerance} m) — stopping.")
                 self.vel_pub.publish(Twist())  # Stop the robot
+                self.get_logger().info(f"Marker Touch Successful!")
 
                 req = MarkerConfirmation.Request()
                 req.marker = msg.marker
