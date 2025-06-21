@@ -27,7 +27,7 @@ class VisualServoingNode(Node):
             parameters=[
                 ('touched_marker_service_name', 'touched_marker'),
                 ('touched_distance_tolerance', 0.01),      # Use 1cm tolerance for stop
-                ('base_velocity', 0.50),
+                ('base_velocity', 2),
                 ('alignment_tolerance', 0.01),             # 1cm alignment tolerance
                 ('colour_image_topic', '/oak/rgb/image_raw/compressed'),
                 ('depth_image_topic', '/oak/stereo/image_raw/compressedDepth'),
@@ -98,7 +98,75 @@ class VisualServoingNode(Node):
     def camera_info_callback(self, msg):
         self.camera_info = msg
 
+
     def marker_callback(self, msg: MarkerPointStamped):
+        # Transform marker position to base_link frame
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'base_link',
+                msg.header.frame_id,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+            
+            p_base = do_transform_point(
+                PointStamped(header=msg.header, point=msg.point),
+                transform)
+        except Exception as e:
+            self.get_logger().warn(f"TF transform failed: {e}")
+            return  # Can't proceed without transform
+
+        # Compute errors relative to target point
+        error_x = p_base.point.x - self.target_x
+        error_y = p_base.point.y - self.target_y
+
+        if self.get_parameter('debug_mode').value:
+            self.get_logger().info(
+                f"[STATE: {self.state.name}] Marker pos: x={p_base.point.x:.4f}, y={p_base.point.y:.4f}, "
+                f"errors: x={error_x:.4f}, y={error_y:.4f}")
+
+        cmd = Twist()
+        base_vel = self.get_parameter('base_velocity').value
+        tol_x = self.get_parameter('touched_distance_tolerance').value
+        tol_y = self.get_parameter('alignment_tolerance').value
+
+        if self.state == VisualServoingState.APPROACHING:
+            if abs(error_x) > tol_x:
+                # Only move in X during approaching
+                cmd.linear.x = np.clip(error_x * 0.5, -base_vel, base_vel)
+                cmd.linear.y = 0.0
+            else:
+                self.get_logger().info("Reached target X. Switching to ALIGNING.")
+                self.state = VisualServoingState.ALIGNING
+                cmd.linear.x = 0.0
+                cmd.linear.y = 0.0  # Optional: add short pause if needed
+
+        elif self.state == VisualServoingState.ALIGNING:
+            if abs(error_y) > tol_y:
+                # Only move in Y during alignment
+                cmd.linear.y = np.clip(error_y * 0.5, -base_vel, base_vel)
+                cmd.linear.x = 0.0
+            else:
+                self.get_logger().info("Aligned with marker. Confirming touch.")
+                self.state = VisualServoingState.TOUCHED
+
+                # Call service asynchronously
+                req = MarkerConfirmation.Request()
+                req.marker = msg.marker
+                future = self.touch_client.call_async(req)
+                future.add_done_callback(self.handle_service_response)
+
+                # Stop robot immediately
+                self.vel_pub.publish(Twist())
+                return  # No more movement commands this cycle
+
+        elif self.state == VisualServoingState.TOUCHED:
+            # Stay still
+            cmd.linear.x = 0.0
+            cmd.linear.y = 0.0
+
+        self.vel_pub.publish(cmd)
+
+    # def marker_callback(self, msg: MarkerPointStamped):
         # Transform marker position to base_link frame
         try:
             transform = self.tf_buffer.lookup_transform(
