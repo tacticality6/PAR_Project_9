@@ -122,17 +122,6 @@ class VisualServoingNode(Node):
         except Exception as e:
             self.get_logger().error(f"Could not convert depth image: {e}")
 
-    # def depth_callback(self, msg):
-    #     # Decompress the message manually from the data buffer
-    #     np_arr = np.frombuffer(msg.data, np.uint8)
-
-    #     self.depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
-        
-    #     # Check if decoding was successful
-    #     if self.depth_image is None:
-    #         self.get_logger().warn("Failed to decode compressed depth image")
-    #         return
-
     def camera_info_callback(self, msg):
         # self.get_logger().info("--- Info callback received! ---")
         self.camera_info = msg
@@ -155,24 +144,24 @@ class VisualServoingNode(Node):
         # upper_orange = np.array([25, 255, 255])
         mask = cv2.inRange(hsv, lower_orange, upper_orange)
 
-        # --- DEBUG ---
-        if self.debugMode:
-            cv2.imshow("Orange Marker Mask", mask)
-            cv2.waitKey(1) # Keep window open for 1ms
-        # --- END DEBUG ---
+        # # --- DEBUG ---
+        # if self.debugMode:
+        #     cv2.imshow("Orange Marker Mask", mask)
+        #     cv2.waitKey(1) # Keep window open for 1ms
+        # # --- END DEBUG ---
 
         # Find contours and centroid
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             self.get_logger().warn("No orange marker detected.")
             
-            # --- DEBUG ---
-            if self.debugMode:
-                try:
-                    cv2.destroyWindow("Orange Marker Mask")
-                except cv2.error:
-                    pass # Window might already be closed
-            # --- END DEBUG ---
+            # # --- DEBUG ---
+            # if self.debugMode:
+            #     try:
+            #         cv2.destroyWindow("Orange Marker Mask")
+            #     except cv2.error:
+            #         pass # Window might already be closed
+            # # --- END DEBUG ---
 
 
             return
@@ -186,21 +175,21 @@ class VisualServoingNode(Node):
         cx = int(M["m10"] / M["m00"])
         cy = int(M["m01"] / M["m00"])
 
-        # --- DEBUG: Draw centroid on image ---
-        if self.debugMode:
-            debug_img_color = self.color_image.copy()
-            cv2.circle(debug_img_color, (cx, cy), 5, (0, 255, 0), -1) # Green circle at centroid
-            cv2.imshow("Color Image with Centroid", debug_img_color)
-            cv2.waitKey(1)
-        # --- END DEBUG ---
+        # # --- DEBUG: Draw centroid on image ---
+        # if self.debugMode:
+        #     debug_img_color = self.color_image.copy()
+        #     cv2.circle(debug_img_color, (cx, cy), 5, (0, 255, 0), -1) # Green circle at centroid
+        #     cv2.imshow("Color Image with Centroid", debug_img_color)
+        #     cv2.waitKey(1)
+        # # --- END DEBUG ---
 
 
         # Get depth at centroid
 
-        # --- DEBUG: Print raw depth value before conversion ---
-        raw_depth_val = self.depth_image[cy, cx]
-        self.get_logger().info(f"Raw Depth Value at centroid ({cx}, {cy}): {raw_depth_val}")
-        # --- END DEBUG ---
+        # # --- DEBUG: Print raw depth value before conversion ---
+        # raw_depth_val = self.depth_image[cy, cx]
+        # self.get_logger().info(f"Raw Depth Value at centroid ({cx}, {cy}): {raw_depth_val}")
+        # # --- END DEBUG ---
 
 
         depth = self.depth_image[cy, cx] / 1000.0  # convert mm to meters
@@ -218,7 +207,7 @@ class VisualServoingNode(Node):
         cy_cam = self.camera_info.k[5]
 
         # --- DEBUG: Print camera intrinsics ---
-        self.get_logger().info(f"Camera Intrinsics K: fx={fx}, fy={fy}, cx_cam={cx_cam}, cy_cam={cy_cam}")
+        # self.get_logger().info(f"Camera Intrinsics K: fx={fx}, fy={fy}, cx_cam={cx_cam}, cy_cam={cy_cam}")
         # --- END DEBUG ---
 
         x = (cx - cx_cam) * depth / fx
@@ -275,7 +264,7 @@ class VisualServoingNode(Node):
             
 
             # --- DEBUG: Print marker position in base_link ---
-            self.get_logger().info(f"Marker {msg.marker} in base_link: (x={p_base.point.x:.3f}, y={p_base.point.y:.3f}, z={p_base.point.z:.3f})")
+            # self.get_logger().info(f"Marker {msg.marker} in base_link: (x={p_base.point.x:.3f}, y={p_base.point.y:.3f}, z={p_base.point.z:.3f})")
             # --- END DEBUG ---
 
             # Target forward distance: 0.25 meters
@@ -286,31 +275,12 @@ class VisualServoingNode(Node):
             # Compute Euclidean distance from pointer tip to marker
             distance = (error_forward**2 + error_sideways**2)**0.5
 
-            self.get_logger().info(f"Distance to target (sqrt(Err_fwd^2 + Err_side^2)): {distance:.2f} m")
+            # self.get_logger().info(f"Distance to target (sqrt(Err_fwd^2 + Err_side^2)): {distance:.2f} m")
 
             # Log current distance
-            self.get_logger().info(f"Calculated Forward Error (Z): {error_forward:.3f} m")
-            self.get_logger().info(f"Calculated Sideways Error (Y): {error_sideways:.3f} m")
-            self.get_logger().info(f"Distance to target (sqrt(Err_fwd^2 + Err_side^2)): {distance:.2f} m")
-
-
-            # ─── 2. Compute errors: marker minus pointer ────────────────────
-            # error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
-            # error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
-
-            # ─── 3. Touch window check ─────────────────────────────────────
-            # if abs(error_x) < self.touchedDistanceTolerance and \
-            # abs(error_y) < self.touchedDistanceTolerance:
-            #     self.get_logger().info("Pointer aligned with marker — stopping.")
-            #     self.vel_pub.publish(Twist())                    # hard stop
-
-            #     req = MarkerConfirmation.Request()
-            #     req.marker = msg.marker
-            #     future = self.touch_confirm_client.call_async(req)
-            #     future.add_done_callback(self.handle_service_future)
-
-            #     self.state = VisualServoingState.IDLE
-            #     return
+            # self.get_logger().info(f"Calculated Forward Error (Z): {error_forward:.3f} m")
+            # self.get_logger().info(f"Calculated Sideways Error (Y): {error_sideways:.3f} m")
+            # self.get_logger().info(f"Distance to target (sqrt(Err_fwd^2 + Err_side^2)): {distance:.2f} m")
 
 
             # Compute marker position in base_link frame
@@ -322,15 +292,15 @@ class VisualServoingNode(Node):
             adjusted_error_x = error_x - pointer_offset_x
 
             # --- DEBUG: Print calculated errors ---
-            self.get_logger().info(f"Adjusted Error X (marker_x - pointer_offset_x): {adjusted_error_x:.3f}")
-            self.get_logger().info(f"Error Y (marker_y): {error_y:.3f}")
+            # self.get_logger().info(f"Adjusted Error X (marker_x - pointer_offset_x): {adjusted_error_x:.3f}")
+            # self.get_logger().info(f"Error Y (marker_y): {error_y:.3f}")
             # --- END DEBUG ---
 
             # Log current distance
-            self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
+            # self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
 
             # --- NEW DEBUG LINE ---
-            self.get_logger().info(f"Checking stop condition: distance={distance:.4f} <= tolerance={self.touchedDistanceTolerance:.4f}?")
+            # self.get_logger().info(f"Checking stop condition: distance={distance:.4f} <= tolerance={self.touchedDistanceTolerance:.4f}?")
             # --- END NEW DEBUG LINE ---
 
             # Stop if within 25cm
@@ -345,6 +315,8 @@ class VisualServoingNode(Node):
 
                 self.state = VisualServoingState.IDLE
                 return
+            
+            self.get_logger().info(f"Marker {msg.marker.id} Touched Successfully!")
 
 
             # ─── 4. Proportional controller (diff-drive by default) ────────
@@ -370,7 +342,6 @@ class VisualServoingNode(Node):
             self.get_logger().error(f"Error in marker_callback: {e}")
             return
         
-
 
     
 
