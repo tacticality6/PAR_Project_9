@@ -115,6 +115,10 @@ class VisualServoingNode(Node):
     def depth_callback(self, msg):
         try:
             self.depth_image = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding='passthrough')
+
+            if self.debugMode and self.depth_image is not None:
+                self.get_logger().info(f"Depth Image received. Type: {self.depth_image.dtype}, Shape: {self.depth_image.shape}")
+
         except Exception as e:
             self.get_logger().error(f"Could not convert depth image: {e}")
 
@@ -132,8 +136,6 @@ class VisualServoingNode(Node):
     def camera_info_callback(self, msg):
         # self.get_logger().info("--- Info callback received! ---")
         self.camera_info = msg
-
-
 
     def localise_pointer(self):
         # self.get_logger().info("Localising pointer position...")
@@ -153,10 +155,26 @@ class VisualServoingNode(Node):
         # upper_orange = np.array([25, 255, 255])
         mask = cv2.inRange(hsv, lower_orange, upper_orange)
 
+        # --- DEBUG ---
+        if self.debugMode:
+            cv2.imshow("Orange Marker Mask", mask)
+            cv2.waitKey(1) # Keep window open for 1ms
+        # --- END DEBUG ---
+
         # Find contours and centroid
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             self.get_logger().warn("No orange marker detected.")
+            
+            # --- DEBUG ---
+            if self.debugMode:
+                try:
+                    cv2.destroyWindow("Orange Marker Mask")
+                except cv2.error:
+                    pass # Window might already be closed
+            # --- END DEBUG ---
+
+
             return
 
         largest = max(contours, key=cv2.contourArea)
@@ -168,12 +186,28 @@ class VisualServoingNode(Node):
         cx = int(M["m10"] / M["m00"])
         cy = int(M["m01"] / M["m00"])
 
+        # --- DEBUG: Draw centroid on image ---
+        if self.debugMode:
+            debug_img_color = self.color_image.copy()
+            cv2.circle(debug_img_color, (cx, cy), 5, (0, 255, 0), -1) # Green circle at centroid
+            cv2.imshow("Color Image with Centroid", debug_img_color)
+            cv2.waitKey(1)
+        # --- END DEBUG ---
+
+
         # Get depth at centroid
+
+        # --- DEBUG: Print raw depth value before conversion ---
+        raw_depth_val = self.depth_image[cy, cx]
+        self.get_logger().info(f"Raw Depth Value at centroid ({cx}, {cy}): {raw_depth_val}")
+        # --- END DEBUG ---
+
+
         depth = self.depth_image[cy, cx] / 1000.0  # convert mm to meters
         # depth = self.depth_image[cy, cx]
-        # if depth == 0:
-        #     self.get_logger().warn("No depth info at marker centroid.")
-        #     return
+        if depth == 0:
+            self.get_logger().warn("No depth info at marker centroid.")
+            return
         
         # depth = float(depth)/1000.00
 
@@ -182,6 +216,10 @@ class VisualServoingNode(Node):
         fy = self.camera_info.k[4]
         cx_cam = self.camera_info.k[2]
         cy_cam = self.camera_info.k[5]
+
+        # --- DEBUG: Print camera intrinsics ---
+        self.get_logger().info(f"Camera Intrinsics K: fx={fx}, fy={fy}, cx_cam={cx_cam}, cy_cam={cy_cam}")
+        # --- END DEBUG ---
 
         x = (cx - cx_cam) * depth / fx
         y = (cy - cy_cam) * depth / fy
@@ -232,6 +270,10 @@ class VisualServoingNode(Node):
         except Exception as e:
             self.get_logger().warn(f"TF transform failed: {e}")
             return
+        
+        # --- DEBUG: Print marker position in base_link ---
+        self.get_logger().info(f"Marker {msg.marker} in base_link: (x={p_base.point.x:.3f}, y={p_base.point.y:.3f}, z={p_base.point.z:.3f})")
+        # --- END DEBUG ---
 
         # ─── 2. Compute errors: marker minus pointer ────────────────────
         # error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
@@ -260,6 +302,11 @@ class VisualServoingNode(Node):
         pointer_offset_x = 0.25
         adjusted_error_x = error_x - pointer_offset_x
 
+        # --- DEBUG: Print calculated errors ---
+        self.get_logger().info(f"Adjusted Error X (marker_x - pointer_offset_x): {adjusted_error_x:.3f}")
+        self.get_logger().info(f"Error Y (marker_y): {error_y:.3f}")
+        # --- END DEBUG ---
+
         # Compute Euclidean distance from pointer tip to marker
         distance = (adjusted_error_x ** 2 + error_y ** 2) ** 0.5
 
@@ -267,7 +314,7 @@ class VisualServoingNode(Node):
         self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
 
         # Stop if within 25cm
-        if distance <= 0.25:
+        if distance <= self.touchedDistanceTolerance:
             self.get_logger().info("Reached marker (within 25 cm) — stopping.")
             self.vel_pub.publish(Twist())  # Stop the robot
 
@@ -294,7 +341,10 @@ class VisualServoingNode(Node):
         # For a mecanum/holonomic base, comment the line above and use:
         cmd.linear.y = max(min(0.8 * error_y, 0.15), -0.15)
 
+        cmd.angular.z = max(min(turn_cmd, 0.70), -0.70)
+
         self.vel_pub.publish(cmd)
+        self.get_logger().info(f"Publishing cmd_vel: linear.x={cmd.linear.x:.3f}, linear.y={cmd.linear.y:.3f}, angular.z={cmd.angular.z:.3f}")
 
     
 
