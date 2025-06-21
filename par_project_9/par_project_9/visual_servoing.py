@@ -275,6 +275,21 @@ class VisualServoingNode(Node):
         self.get_logger().info(f"Marker {msg.marker} in base_link: (x={p_base.point.x:.3f}, y={p_base.point.y:.3f}, z={p_base.point.z:.3f})")
         # --- END DEBUG ---
 
+        # Target forward distance: 0.25 meters
+        target_forward_distance = 0.25 # Stopping distance
+
+        # Error in forward directiom
+        error_forward = p_base.point.z - target_forward_distance
+
+        # Error in side direction
+        error_sideways = p_base.point.y
+
+        # Log current distance
+        self.get_logger().info(f"Calculated Forward Error (Z): {error_forward:.3f} m")
+        self.get_logger().info(f"Calculated Sideways Error (Y): {error_sideways:.3f} m")
+        self.get_logger().info(f"Distance to target (sqrt(Err_fwd^2 + Err_side^2)): {distance:.2f} m")
+
+
         # ─── 2. Compute errors: marker minus pointer ────────────────────
         # error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
         # error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
@@ -315,7 +330,7 @@ class VisualServoingNode(Node):
 
         # Stop if within 25cm
         if distance <= self.touchedDistanceTolerance:
-            self.get_logger().info("Reached marker (within 25 cm) — stopping.")
+            self.get_logger().info(f"Reached marker (within {self.touchedDistanceTolerance} m) — stopping.")
             self.vel_pub.publish(Twist())  # Stop the robot
 
             req = MarkerConfirmation.Request()
@@ -328,20 +343,19 @@ class VisualServoingNode(Node):
 
 
         # ─── 4. Proportional controller (diff-drive by default) ────────
-        k_lin, k_ang = 0.8, 2.0
-
-        # If X-axis points *backward* on your robot, flip the sign:
-        fwd_cmd  =  k_lin * (-error_x)      # tag ahead → positive speed
-        turn_cmd =  k_ang *   error_y       # tag left  → turn left (CCW)
+        k_lin_z = 0.8 # Proportional gain for forward/backward movement (along Z)
+        k_lin_y = 0.8 # Proportional gain for sideways movement (along Y)
+        k_ang_z = 2.0 # Proportional gain for angular movement (to align X)
 
         cmd = Twist()
-        cmd.linear.x  = max(min(fwd_cmd,  0.15), -0.15)   # ±0.15 m/s
-        # cmd.angular.z = max(min(turn_cmd, 0.70), -0.70)   # ±0.70 rad/s
 
-        # For a mecanum/holonomic base, comment the line above and use:
-        cmd.linear.y = max(min(0.8 * error_y, 0.15), -0.15)
+        fwd_cmd = k_lin_z * error_forward
 
-        cmd.angular.z = max(min(turn_cmd, 0.70), -0.70)
+        cmd.linear.x = max(min(fwd_cmd, 0.15), -0.15)
+        cmd.linear.y = max(min(-k_lin_y * error_sideways, 0.15), -0.15)
+
+        error_angular_x = p_base.point.x
+        cmd.angular.z = max(min(-k_ang_z * error_angular_x, 0.70), -0.70)
 
         self.vel_pub.publish(cmd)
         self.get_logger().info(f"Publishing cmd_vel: linear.x={cmd.linear.x:.3f}, linear.y={cmd.linear.y:.3f}, angular.z={cmd.angular.z:.3f}")
