@@ -342,7 +342,7 @@ class VisualServoingNode(Node):
 
 
             # ─── 4. Proportional controller (diff-drive by default) ────────
-            k_lin_z = -0.8 # Proportional gain for forward/backward movement (along Z)
+            k_lin_z = 0.8 # Proportional gain for forward/backward movement (along Z)
             k_lin_y = 0.8 # Proportional gain for sideways movement (along Y)
             k_ang_z = 2.0 # Proportional gain for angular movement (to align X)
 
@@ -351,7 +351,7 @@ class VisualServoingNode(Node):
             fwd_cmd = k_lin_z * error_forward
 
             cmd.linear.x = max(min(fwd_cmd, 0.15), -0.15)
-            cmd.linear.y = max(min(k_lin_y * error_sideways, 0.15), -0.15)
+            cmd.linear.y = max(min(-k_lin_y * error_sideways, 0.15), -0.15)
 
             error_angular_x = p_base.point.x
             cmd.angular.z = max(min(k_ang_z * error_angular_x, 0.70), -0.70)
