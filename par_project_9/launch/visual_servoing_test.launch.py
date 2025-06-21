@@ -29,7 +29,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {"touched_marker_service_name": "touched_marker"},
-                {"touched_distance_tolerance": 0.25},
+                {"touched_distance_tolerance": 0.35},
                 {"base_velocity": 0.25},
                 {"colour_image_topic": "/oak/rgb/image_raw/compressed"},
                 {"depth_image_topic": "/oak/rgb/image_raw/compressedDepth"},
