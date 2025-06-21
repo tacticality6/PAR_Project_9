@@ -1,128 +1,111 @@
+#!/usr/bin/env python3
 
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PointStamped, PoseStamped
-from std_srvs.srv import Trigger
-from std_msgs.msg import Header
 from cv_bridge import CvBridge
+from custom_msgs.msg import MarkerPointStamped  # Replace with your actual message type
 import message_filters
 import numpy as np
 import cv2
-import tf2_ros
-import tf2_geometry_msgs
-from par_project_9_interfaces.srv import MarkerConfirmation
-from par_project_9_interfaces.msg import MarkerPointStamped
 
 class VisualServoingNode(Node):
     def __init__(self):
-        super().__init__('visual_servoing_node')
+        super().__init__('VisualServoingNode')
+
         self.bridge = CvBridge()
+        self.marker_point = None
 
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        # Parameters
+        self.target_distance = 0.25  # 25 cm
+        self.distance_tolerance = 0.02  # ±2 cm
+        self.center_threshold_px = 20  # center margin in pixels
+        self.linear_speed = 0.1  # m/s
+        self.angular_speed = 0.1  # rad/s
 
-        self.marker_received = False
-        self.marker_pose = None
-
-        # Subscriptions
+        # Subscribers
         self.image_sub = message_filters.Subscriber(self, Image, '/camera/color/image_raw')
         self.depth_sub = message_filters.Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw')
-        self.camera_info_sub = message_filters.Subscriber(self, CameraInfo, '/camera/color/camera_info')
+        self.cam_info_sub = message_filters.Subscriber(self, CameraInfo, '/camera/color/camera_info')
+        self.marker_sub = self.create_subscription(MarkerPointStamped, '/marker_point', self.marker_callback, 10)
 
-        ts = message_filters.ApproximateTimeSynchronizer(
-            [self.image_sub, self.depth_sub, self.camera_info_sub], queue_size=10, slop=0.1)
-        ts.registerCallback(self.rgbd_callback)
+        # Synchronizer
+        self.sync = message_filters.ApproximateTimeSynchronizer(
+            [self.image_sub, self.depth_sub, self.cam_info_sub], 10, 0.1)
+        self.sync.registerCallback(self.image_callback)
 
-        self.marker_sub = self.create_subscription(
-            MarkerPointStamped, '/marker_point', self.marker_callback, 10)
-
-        self.pose_pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
-
-        self.touch_client = self.create_client(Trigger, '/touch_confirm')
-        while not self.touch_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for /touch_confirm service...')
-
-    def rgbd_callback(self, rgb_msg, depth_msg, cam_info_msg):
-        if not self.marker_received:
-            return
-
-        try:
-            cv_image = self.bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
-            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-        except Exception as e:
-            self.get_logger().error(f"CV Bridge error: {e}")
-            return
-
-        x, y = int(self.marker_pose.x), int(self.marker_pose.y)
-        if y >= depth_image.shape[0] or x >= depth_image.shape[1]:
-            self.get_logger().warn('Marker point out of depth image bounds.')
-            return
-
-        depth = depth_image[y, x] / 1000.0  # Convert mm to meters
-        if np.isnan(depth) or depth <= 0.0:
-            self.get_logger().warn("Invalid depth at marker location")
-            return
-
-        fx = cam_info_msg.k[0]
-        fy = cam_info_msg.k[4]
-        cx = cam_info_msg.k[2]
-        cy = cam_info_msg.k[5]
-
-        # Deproject pixel to 3D
-        X = (x - cx) * depth / fx
-        Y = (y - cy) * depth / fy
-        Z = depth
-
-        camera_point = PointStamped()
-        camera_point.header = depth_msg.header
-        camera_point.point.x = X
-        camera_point.point.y = Y
-        camera_point.point.z = Z
-
-        try:
-            target_point = self.tf_buffer.transform(camera_point, 'base_link', timeout=rclpy.duration.Duration(seconds=1.0))
-        except Exception as e:
-            self.get_logger().error(f"Transform error: {e}")
-            return
-
-        pose = PoseStamped()
-        pose.header.stamp = self.get_clock().now().to_msg()
-        pose.header.frame_id = "base_link"
-        pose.pose.position = target_point.point
-        pose.pose.orientation.w = 1.0  # No rotation for simplicity
-
-        self.pose_pub.publish(pose)
-        self.get_logger().info(f"Published goal pose at ({target_point.point.x:.2f}, {target_point.point.y:.2f}, {target_point.point.z:.2f})")
-
-        self.call_touch_confirm()
-
-        self.marker_received = False  # Reset until next marker
+        # Velocity publisher
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
     def marker_callback(self, msg):
-        self.marker_pose = msg.marker.point
-        self.marker_received = True
-        self.get_logger().info(f"Received marker point at ({self.marker_pose.x}, {self.marker_pose.y})")
+        self.marker_point = msg.marker.point  # geometry_msgs/Point
+        self.get_logger().info(f"Marker detected at pixel ({self.marker_point.x:.1f}, {self.marker_point.y:.1f})")
 
-    def call_touch_confirm(self):
-        req = Trigger.Request()
-        future = self.touch_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result().success:
-            self.get_logger().info("Touch confirmed")
+    def image_callback(self, rgb_msg, depth_msg, cam_info_msg):
+        if self.marker_point is None:
+            return
+
+        try:
+            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+        except Exception as e:
+            self.get_logger().error(f"Depth image conversion failed: {e}")
+            return
+
+        x, y = int(self.marker_point.x), int(self.marker_point.y)
+        if y >= depth_image.shape[0] or x >= depth_image.shape[1]:
+            self.get_logger().warn("Marker outside image bounds.")
+            return
+
+        # Get depth at pixel (in meters)
+        depth = depth_image[y, x] / 1000.0
+        if np.isnan(depth) or depth <= 0.01:
+            self.get_logger().warn("Invalid or missing depth.")
+            return
+
+        # Camera center
+        cx = cam_info_msg.k[2]
+        cy = cam_info_msg.k[5]
+        dx = x - cx  # horizontal offset
+        dy = y - cy  # vertical offset
+
+        cmd = Twist()
+
+        # Horizontal (left/right): +dx means marker is to the right of center
+        if abs(dx) > self.center_threshold_px:
+            cmd.linear.x = -self.linear_speed if dx > 0 else self.linear_speed
         else:
-            self.get_logger().warn("Touch failed or not confirmed")
+            cmd.linear.x = 0.0
+
+        # Vertical (forward/backward in camera frame = linear.y)
+        if depth > self.target_distance + self.distance_tolerance:
+            cmd.linear.y = self.linear_speed
+        elif depth < self.target_distance - self.distance_tolerance:
+            cmd.linear.y = -self.linear_speed
+        else:
+            cmd.linear.y = 0.0
+
+        # Optional: Rotate if marker is far from center (e.g., ±100 px)
+        if abs(dx) > 100:
+            cmd.angular.z = -self.angular_speed if dx > 0 else self.angular_speed
+        else:
+            cmd.angular.z = 0.0
+
+        # Check if all conditions met
+        if abs(dx) <= self.center_threshold_px and abs(depth - self.target_distance) <= self.distance_tolerance:
+            self.get_logger().info("✅ Marker aligned and at correct distance. Stopping.")
+            cmd.linear.x = 0.0
+            cmd.linear.y = 0.0
+            cmd.angular.z = 0.0
+
+        self.cmd_pub.publish(cmd)
 
 def main(args=None):
     rclpy.init(args=args)
     node = VisualServoingNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        node.get_logger().info('Shutting down node')
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
