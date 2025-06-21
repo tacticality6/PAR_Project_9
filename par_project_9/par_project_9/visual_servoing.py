@@ -305,7 +305,7 @@ class VisualServoingNode(Node):
 
             # Stop if within 25cm
             if distance <= self.touchedDistanceTolerance:
-                self.get_logger().info(f"Reached marker (within {self.touchedDistanceTolerance} m) — stopping.")
+                # self.get_logger().info(f"Reached marker (within {self.touchedDistanceTolerance} m) — stopping.")
                 self.vel_pub.publish(Twist())  # Stop the robot
 
                 req = MarkerConfirmation.Request()
@@ -316,8 +316,6 @@ class VisualServoingNode(Node):
                 self.state = VisualServoingState.IDLE
                 return
             
-            self.get_logger().info(f"Marker {msg.marker.id} Touched Successfully!")
-
 
             # ─── 4. Proportional controller (diff-drive by default) ────────
             k_lin_z = 0.8 # Proportional gain for forward/backward movement (along Z)
@@ -354,7 +352,7 @@ class VisualServoingNode(Node):
         if response is None:
             self.get_logger().error("Marker Touch Service Returned Nothing")
         else:
-            self.get_logger().info(f"Marker Touch Service Result: {'Succeeded' if response.success else 'Failed'}")
+            self.get_logger().info(f"Marker {msg.marker.id} Touch: {'Succeeded' if response.success else 'Failed'}")
 
 
 def main(args=None):
