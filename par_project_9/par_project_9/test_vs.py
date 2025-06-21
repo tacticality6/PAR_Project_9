@@ -21,7 +21,6 @@ class VisualServoingState(Enum):
 class VisualServoingNode(Node):
     def __init__(self):
         super().__init__("visual_servoing_node")
-        self.get_logger().info(f"Subscribed to: {self.marker_sub.topic_name}")
         
         # Parameters
         self.declare_parameters(namespace='',
@@ -41,6 +40,8 @@ class VisualServoingNode(Node):
         # ROS setup
         self.marker_sub = self.create_subscription(
             MarkerPointStamped, 'marker_position', self.marker_callback, 10)
+        
+        self.get_logger().info(f"Subscribed to: {self.marker_sub.topic_name}")
         
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         
