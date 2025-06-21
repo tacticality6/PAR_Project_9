@@ -259,7 +259,7 @@ class VisualServoingNode(Node):
         # ─── 1. Transform marker position into base_link ────────────────
         try:
             transform = self.tf_buffer.lookup_transform(
-                'base_link',
+                'odom',
                 msg.header.frame_id,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=2.0)
