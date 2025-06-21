@@ -297,10 +297,10 @@ class VisualServoingNode(Node):
             # --- END DEBUG ---
 
             # Log current distance
-            # self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
+            self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
 
             # --- NEW DEBUG LINE ---
-            # self.get_logger().info(f"Checking stop condition: distance={distance:.4f} <= tolerance={self.touchedDistanceTolerance:.4f}?")
+            self.get_logger().info(f"Checking stop condition: distance={distance:.4f} <= tolerance={self.touchedDistanceTolerance:.4f}?")
             # --- END NEW DEBUG LINE ---
 
             # Stop if within 25cm
