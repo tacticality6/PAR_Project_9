@@ -1,174 +1,117 @@
+
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
-from tf2_ros import Buffer, TransformListener
-from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
-from geometry_msgs.msg import PointStamped, Twist
-from sensor_msgs.msg import CameraInfo, CompressedImage
-from enum import Enum
-import cv2
-import numpy as np
+from sensor_msgs.msg import Image, CameraInfo
+from geometry_msgs.msg import PointStamped, PoseStamped
+from std_srvs.srv import Trigger
+from std_msgs.msg import Header
 from cv_bridge import CvBridge
+import message_filters
+import numpy as np
+import cv2
+import tf2_ros
+import tf2_geometry_msgs
 from par_project_9_interfaces.srv import MarkerConfirmation
 from par_project_9_interfaces.msg import MarkerPointStamped
 
-class VisualServoingState(Enum):
-    IDLE = 0
-    APPROACHING = 1
-    ALIGNING = 2
-    TOUCHED = 3
-
 class VisualServoingNode(Node):
     def __init__(self):
-        super().__init__("visual_servoing_node")
-
-        # Parameters
-        self.declare_parameters(namespace='',
-            parameters=[
-                ('touched_marker_service_name', 'touched_marker'),
-                ('touched_distance_tolerance', 0.005),      # 0.5cm tolerance
-                ('base_velocity', 1.0),
-                ('alignment_tolerance', 0.005),             # 0.5cm alignment tolerance
-                ('colour_image_topic', '/oak/rgb/image_raw/compressed'),
-                ('depth_image_topic', '/oak/stereo/image_raw/compressedDepth'),
-                ('camera_info_topic', '/oak/rgb/camera_info'),
-                ('relocalise_pointer_freq', 10.0),
-                ('debug_mode', True)
-            ])
-
-        # ROS setup
-        self.marker_sub = self.create_subscription(
-            MarkerPointStamped, 'marker_position', self.marker_callback, 10)
-
-        self.get_logger().info(f"Subscribed to: {self.marker_sub.topic_name}")
-
-        self.vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-
-        self.touch_client = self.create_client(
-            MarkerConfirmation, 
-            self.get_parameter('touched_marker_service_name').value)
-
-        self.color_sub = self.create_subscription(
-            CompressedImage, 
-            self.get_parameter('colour_image_topic').value, 
-            self.color_callback, 10)
-
-        self.depth_sub = self.create_subscription(
-            CompressedImage,
-            self.get_parameter('depth_image_topic').value,
-            self.depth_callback, 10)
-
-        self.camera_info_sub = self.create_subscription(
-            CameraInfo,
-            self.get_parameter('camera_info_topic').value,
-            self.camera_info_callback, 10)
-
-        # TF setup
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-
-        # CV setup
+        super().__init__('visual_servoing_node')
         self.bridge = CvBridge()
 
-        # State variables
-        self.state = VisualServoingState.APPROACHING
-        self.color_image = None
-        self.depth_image = None
-        self.camera_info = None
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # Target stopping point
-        self.target_x = -0.0700
-        self.target_y = 0.0650
+        self.marker_received = False
+        self.marker_pose = None
 
-        self.get_logger().info("Visual Servoing Node initialized")
+        # Subscriptions
+        self.image_sub = message_filters.Subscriber(self, Image, '/camera/color/image_raw')
+        self.depth_sub = message_filters.Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw')
+        self.camera_info_sub = message_filters.Subscriber(self, CameraInfo, '/camera/color/camera_info')
 
-    def color_callback(self, msg):
-        try:
-            np_arr = np.frombuffer(msg.data, np.uint8)
-            self.color_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        except Exception as e:
-            self.get_logger().error(f"Color image processing failed: {e}")
+        ts = message_filters.ApproximateTimeSynchronizer(
+            [self.image_sub, self.depth_sub, self.camera_info_sub], queue_size=10, slop=0.1)
+        ts.registerCallback(self.rgbd_callback)
 
-    def depth_callback(self, msg):
-        try:
-            self.depth_image = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding='passthrough')
-        except Exception as e:
-            self.get_logger().error(f"Depth image processing failed: {e}")
+        self.marker_sub = self.create_subscription(
+            MarkerPointStamped, '/marker_point', self.marker_callback, 10)
 
-    def camera_info_callback(self, msg):
-        self.camera_info = msg
+        self.pose_pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
 
-    def marker_callback(self, msg: MarkerPointStamped):
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                'base_link',
-                msg.header.frame_id,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.5))
+        self.touch_client = self.create_client(Trigger, '/touch_confirm')
+        while not self.touch_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for /touch_confirm service...')
 
-            p_base = do_transform_point(
-                PointStamped(header=msg.header, point=msg.point),
-                transform)
-        except Exception as e:
-            self.get_logger().warn(f"TF transform failed: {e}")
+    def rgbd_callback(self, rgb_msg, depth_msg, cam_info_msg):
+        if not self.marker_received:
             return
 
-        error_x = p_base.point.x - self.target_x
-        error_y = p_base.point.y - self.target_y
-
-        if self.get_parameter('debug_mode').value:
-            self.get_logger().info(
-                f"[STATE: {self.state.name}] Marker pos: x={p_base.point.x:.4f}, y={p_base.point.y:.4f}, "
-                f"errors: x={error_x:.4f}, y={error_y:.4f}")
-
-        cmd = Twist()
-        base_vel = self.get_parameter('base_velocity').value
-        tol_x = self.get_parameter('touched_distance_tolerance').value
-        tol_y = self.get_parameter('alignment_tolerance').value
-
-        if self.state == VisualServoingState.APPROACHING:
-            if abs(error_x) > tol_x:
-                cmd.linear.x = np.clip(error_x * 0.5, -base_vel, base_vel)
-                cmd.linear.y = 0.0
-            else:
-                self.get_logger().info("Reached target X. Switching to ALIGNING.")
-                self.state = VisualServoingState.ALIGNING
-                cmd.linear.x = 0.0
-                cmd.linear.y = 0.0
-
-        elif self.state == VisualServoingState.ALIGNING:
-            if abs(error_y) > tol_y:
-                cmd.linear.y = np.clip(error_y * 0.5, -base_vel, base_vel)
-                cmd.linear.x = 0.0
-            else:
-                self.get_logger().info("Aligned with marker. Confirming touch.")
-                self.state = VisualServoingState.TOUCHED
-
-                req = MarkerConfirmation.Request()
-                req.marker = msg.marker
-                future = self.touch_client.call_async(req)
-                future.add_done_callback(self.handle_service_response)
-
-                self.vel_pub.publish(Twist())
-                return
-
-        elif self.state == VisualServoingState.TOUCHED:
-            cmd.linear.x = 0.0
-            cmd.linear.y = 0.0
-
-        self.vel_pub.publish(cmd)
-
-    def handle_service_response(self, future):
         try:
-            response = future.result()
-            if response.success:
-                self.get_logger().info("Marker is touched - service confirmed")
-            else:
-                self.get_logger().warn("Marker touch service failed")
+            cv_image = self.bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
+            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
         except Exception as e:
-            self.get_logger().error(f"Service call failed: {e}")
+            self.get_logger().error(f"CV Bridge error: {e}")
+            return
 
-        self.state = VisualServoingState.IDLE
+        x, y = int(self.marker_pose.x), int(self.marker_pose.y)
+        if y >= depth_image.shape[0] or x >= depth_image.shape[1]:
+            self.get_logger().warn('Marker point out of depth image bounds.')
+            return
+
+        depth = depth_image[y, x] / 1000.0  # Convert mm to meters
+        if np.isnan(depth) or depth <= 0.0:
+            self.get_logger().warn("Invalid depth at marker location")
+            return
+
+        fx = cam_info_msg.k[0]
+        fy = cam_info_msg.k[4]
+        cx = cam_info_msg.k[2]
+        cy = cam_info_msg.k[5]
+
+        # Deproject pixel to 3D
+        X = (x - cx) * depth / fx
+        Y = (y - cy) * depth / fy
+        Z = depth
+
+        camera_point = PointStamped()
+        camera_point.header = depth_msg.header
+        camera_point.point.x = X
+        camera_point.point.y = Y
+        camera_point.point.z = Z
+
+        try:
+            target_point = self.tf_buffer.transform(camera_point, 'base_link', timeout=rclpy.duration.Duration(seconds=1.0))
+        except Exception as e:
+            self.get_logger().error(f"Transform error: {e}")
+            return
+
+        pose = PoseStamped()
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.header.frame_id = "base_link"
+        pose.pose.position = target_point.point
+        pose.pose.orientation.w = 1.0  # No rotation for simplicity
+
+        self.pose_pub.publish(pose)
+        self.get_logger().info(f"Published goal pose at ({target_point.point.x:.2f}, {target_point.point.y:.2f}, {target_point.point.z:.2f})")
+
+        self.call_touch_confirm()
+
+        self.marker_received = False  # Reset until next marker
+
+    def marker_callback(self, msg):
+        self.marker_pose = msg.marker.point
+        self.marker_received = True
+        self.get_logger().info(f"Received marker point at ({self.marker_pose.x}, {self.marker_pose.y})")
+
+    def call_touch_confirm(self):
+        req = Trigger.Request()
+        future = self.touch_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result().success:
+            self.get_logger().info("Touch confirmed")
+        else:
+            self.get_logger().warn("Touch failed or not confirmed")
 
 def main(args=None):
     rclpy.init(args=args)
@@ -176,10 +119,10 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info('Shutting down node')
     finally:
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
