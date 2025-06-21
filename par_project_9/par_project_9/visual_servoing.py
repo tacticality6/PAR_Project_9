@@ -262,7 +262,7 @@ class VisualServoingNode(Node):
                 'base_link',
                 msg.header.frame_id,
                 rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.5)
+                timeout=rclpy.duration.Duration(seconds=2.0)
             )
             p_base = do_transform_point(PointStamped(header=msg.header,
                                                     point=msg.point),
