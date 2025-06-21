@@ -22,7 +22,7 @@ class VisualServoingNode(Node):
         self.target_distance = 0.25  # 25 cm
         self.distance_tolerance = 0.02  # ±2 cm
         self.center_threshold_px = 20  # center margin in pixels
-        self.linear_speed = 0.1  # m/s
+        self.linear_speed = 1.0  # m/s
         self.angular_speed = 0.1  # rad/s
 
         # Subscribers
