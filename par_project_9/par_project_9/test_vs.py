@@ -27,7 +27,7 @@ class VisualServoingNode(Node):
             parameters=[
                 ('touched_marker_service_name', 'touched_marker'),
                 ('touched_distance_tolerance', 0.01),      # Use 1cm tolerance for stop
-                ('base_velocity', 0.25),
+                ('base_velocity', 0.50),
                 ('alignment_tolerance', 0.01),             # 1cm alignment tolerance
                 ('colour_image_topic', '/oak/rgb/image_raw/compressed'),
                 ('depth_image_topic', '/oak/stereo/image_raw/compressedDepth'),
