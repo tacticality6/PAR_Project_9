@@ -256,7 +256,7 @@ class VisualServoingNode(Node):
         distance = (error_x**2 + error_y**2)**0.5
         self.get_logger().info(f"Distance to marker: {distance:.2f} m")
 
-        if distance < 0.25:  # 25 cm stopping distance
+        if distance < 0.95:  # 25 cm stopping distance
             self.get_logger().info("Pointer within 25cm of marker — stopping.")
             self.vel_pub.publish(Twist())  # hard stop
 
