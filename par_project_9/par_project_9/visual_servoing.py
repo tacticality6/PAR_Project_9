@@ -255,19 +255,17 @@ class VisualServoingNode(Node):
         
         distance = (error_x**2 + error_y**2)**0.5
 
-    if distance < 0.25:  # 25 cm stopping distance
-        self.get_logger().info("Pointer within 25cm of marker — stopping.")
-        self.vel_pub.publish(Twist())  # hard stop
+        if distance < 0.25:  # 25 cm stopping distance
+            self.get_logger().info("Pointer within 25cm of marker — stopping.")
+            self.vel_pub.publish(Twist())  # hard stop
 
-        req = MarkerConfirmation.Request()
-        req.marker = msg.marker
-        future = self.touch_confirm_client.call_async(req)
-        future.add_done_callback(self.handle_service_future)
+            req = MarkerConfirmation.Request()
+            req.marker = msg.marker
+            future = self.touch_confirm_client.call_async(req)
+            future.add_done_callback(self.handle_service_future)
 
-        self.state = VisualServoingState.IDLE
-        return
-
-
+            self.state = VisualServoingState.IDLE
+            return
 
 
         # ─── 4. Proportional controller (diff-drive by default) ────────
