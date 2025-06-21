@@ -286,6 +286,8 @@ class VisualServoingNode(Node):
             # Compute Euclidean distance from pointer tip to marker
             distance = (error_forward**2 + error_sideways**2)**0.5
 
+            self.get_logger().info(f"Distance to target (sqrt(Err_fwd^2 + Err_side^2)): {distance:.2f} m")
+
             # Log current distance
             self.get_logger().info(f"Calculated Forward Error (Z): {error_forward:.3f} m")
             self.get_logger().info(f"Calculated Sideways Error (Y): {error_sideways:.3f} m")
@@ -326,6 +328,10 @@ class VisualServoingNode(Node):
 
             # Log current distance
             self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
+
+            # --- DEBUG ---
+            self.get_logger().info(f"Checking stop condition: distance={distance:.4f} <= tolerance={self.touchedDistanceTolerance:.4f}?")
+            # --- END NEW DEBUG LINE ---
 
             # Stop if within 25cm
             if distance <= self.touchedDistanceTolerance:
