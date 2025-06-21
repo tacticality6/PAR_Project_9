@@ -238,18 +238,37 @@ class VisualServoingNode(Node):
         error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
 
         # ─── 3. Touch window check ─────────────────────────────────────
-        if abs(error_x) < self.touchedDistanceTolerance and \
-        abs(error_y) < self.touchedDistanceTolerance:
-            self.get_logger().info("Pointer aligned with marker — stopping.")
-            self.vel_pub.publish(Twist())                    # hard stop
+        # if abs(error_x) < self.touchedDistanceTolerance and \
+        # abs(error_y) < self.touchedDistanceTolerance:
+        #     self.get_logger().info("Pointer aligned with marker — stopping.")
+        #     self.vel_pub.publish(Twist())                    # hard stop
 
-            req = MarkerConfirmation.Request()
-            req.marker = msg.marker
-            future = self.touch_confirm_client.call_async(req)
-            future.add_done_callback(self.handle_service_future)
+        #     req = MarkerConfirmation.Request()
+        #     req.marker = msg.marker
+        #     future = self.touch_confirm_client.call_async(req)
+        #     future.add_done_callback(self.handle_service_future)
 
-            self.state = VisualServoingState.IDLE
-            return
+        #     self.state = VisualServoingState.IDLE
+        #     return
+
+        # Compute Euclidean distance to marker
+        
+        distance = (error_x**2 + error_y**2)**0.5
+
+    if distance < 0.25:  # 25 cm stopping distance
+        self.get_logger().info("Pointer within 25cm of marker — stopping.")
+        self.vel_pub.publish(Twist())  # hard stop
+
+        req = MarkerConfirmation.Request()
+        req.marker = msg.marker
+        future = self.touch_confirm_client.call_async(req)
+        future.add_done_callback(self.handle_service_future)
+
+        self.state = VisualServoingState.IDLE
+        return
+
+
+
 
         # ─── 4. Proportional controller (diff-drive by default) ────────
         k_lin, k_ang = 0.8, 2.0
