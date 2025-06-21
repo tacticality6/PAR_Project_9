@@ -259,10 +259,10 @@ class VisualServoingNode(Node):
         # ─── 1. Transform marker position into base_link ────────────────
         try:
             transform = self.tf_buffer.lookup_transform(
-                'odom',
+                'base_link',
                 msg.header.frame_id,
                 rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=2.0)
+                timeout=rclpy.duration.Duration(seconds=0.5)
             )
             p_base = do_transform_point(PointStamped(header=msg.header,
                                                     point=msg.point),
@@ -323,7 +323,7 @@ class VisualServoingNode(Node):
         # --- END DEBUG ---
 
         # Compute Euclidean distance from pointer tip to marker
-        distance = (adjusted_error_x ** 2 + error_y ** 2) ** 0.5
+        distance = (error_forward**2 + error_sideways**2)**0.5
 
         # Log current distance
         self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
