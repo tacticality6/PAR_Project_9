@@ -351,10 +351,10 @@ class VisualServoingNode(Node):
             fwd_cmd = k_lin_z * error_forward
 
             cmd.linear.x = max(min(fwd_cmd, 0.15), -0.15)
-            cmd.linear.y = max(min(-k_lin_y * error_sideways, 0.15), -0.15)
+            cmd.linear.y = max(min(k_lin_y * error_sideways, 0.15), -0.15)
 
             error_angular_x = p_base.point.x
-            cmd.angular.z = max(min(-k_ang_z * error_angular_x, 0.70), -0.70)
+            cmd.angular.z = max(min(k_ang_z * error_angular_x, 0.70), -0.70)
 
             self.vel_pub.publish(cmd)
             self.get_logger().info(f"Publishing cmd_vel: linear.x={cmd.linear.x:.3f}, linear.y={cmd.linear.y:.3f}, angular.z={cmd.angular.z:.3f}")
