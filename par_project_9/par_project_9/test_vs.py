@@ -98,74 +98,72 @@ class VisualServoingNode(Node):
         self.camera_info = msg
 
     def marker_callback(self, msg: MarkerPointStamped):
-
         self.get_logger().info(f"Received marker at X={msg.point.x}, Y={msg.point.y}")
 
-        current_time = self.get_clock().now()
-        
-        if self.state == VisualServoingState.IDLE:
-            self.get_logger().info("Marker detected — starting to approach")
-            self.state = VisualServoingState.APPROACHING
-
-            
         # Transform marker position to base_link frame
         try:
             transform = self.tf_buffer.lookup_transform(
-                'odom',
+                'base_link',  # changed from 'odom'
                 msg.header.frame_id,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.5))
-            
+
             p_base = do_transform_point(
                 PointStamped(header=msg.header, point=msg.point),
                 transform)
+        
         except Exception as e:
             self.get_logger().warn(f"TF transform failed: {e}")
-            return
+        return
 
         # Calculate errors
-        error_x = p_base.point.x - self.marker_offset['x']  # Forward distance to marker
+        error_x = p_base.point.x - self.marker_offset['x']  # Forward distance
         error_y = p_base.point.y - self.marker_offset['y']  # Sideways offset
-        
-        # State machine for visual servoing
+
+        # If we're idle, initiate servoing
+        if self.state == VisualServoingState.IDLE:
+            self.get_logger().info("Marker detected. Starting approach.")
+            self.state = VisualServoingState.APPROACHING
+
         cmd = Twist()
-        
+
+        # State machine logic
         if self.state == VisualServoingState.APPROACHING:
-            # Move toward marker until target distance (25cm)
-            if abs(error_x) <= self.get_parameter('target_distance').value:
+            if error_x <= self.get_parameter('target_distance').value:
                 self.get_logger().info("Reached target distance, starting alignment")
                 self.state = VisualServoingState.ALIGNING
             else:
-                # Proportional control for forward/backward motion
+                # Move forward (ignore sideways error for now)
                 cmd.linear.x = np.clip(
-                    0.5 * error_x, 
+                    0.5 * error_x,
                     -self.get_parameter('base_velocity').value,
                     self.get_parameter('base_velocity').value)
-                
+
         elif self.state == VisualServoingState.ALIGNING:
-            # Sideways movement to align pointer with marker
             if abs(error_y) <= self.get_parameter('alignment_tolerance').value:
                 self.get_logger().info("Pointer aligned with marker - logging touch")
                 self.state = VisualServoingState.TOUCHED
-                
-                # Call service to log touch
+
+                # Call service
                 req = MarkerConfirmation.Request()
                 req.marker = msg.marker
                 future = self.touch_client.call_async(req)
                 future.add_done_callback(self.handle_service_response)
-                
+
                 # Stop robot
                 self.vel_pub.publish(Twist())
+                return  # Don't send additional velocity
+
             else:
-                # Proportional control for sideways motion (mecanum)
+                # Move sideways only
                 cmd.linear.y = np.clip(
                     0.8 * error_y,
                     -self.get_parameter('base_velocity').value,
                     self.get_parameter('base_velocity').value)
-        
-        # Publish velocity command if not in TOUCHED state
+
         if self.state != VisualServoingState.TOUCHED:
             self.vel_pub.publish(cmd)
+
 
     def handle_service_response(self, future):
         try:
