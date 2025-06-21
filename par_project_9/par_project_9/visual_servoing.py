@@ -342,7 +342,7 @@ class VisualServoingNode(Node):
 
 
             # ─── 4. Proportional controller (diff-drive by default) ────────
-            k_lin_z = 0.8 # Proportional gain for forward/backward movement (along Z)
+            k_lin_z = -0.8 # Proportional gain for forward/backward movement (along Z)
             k_lin_y = 0.8 # Proportional gain for sideways movement (along Y)
             k_ang_z = 2.0 # Proportional gain for angular movement (to align X)
 
