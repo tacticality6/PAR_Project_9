@@ -234,13 +234,8 @@ class VisualServoingNode(Node):
             return
 
         # ─── 2. Compute errors: marker minus pointer ────────────────────
-        # error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
-        # error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
-
-        # Assuming you transform marker pose to base_link frame
-        error_x = marker_pose.pose.position.x
-        error_y = marker_pose.pose.position.y
-
+        error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
+        error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
 
         # ─── 3. Touch window check ─────────────────────────────────────
         # if abs(error_x) < self.touchedDistanceTolerance and \
