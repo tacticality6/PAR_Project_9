@@ -245,7 +245,7 @@ class VisualServoingNode(Node):
         if self.state == VisualServoingState.IDLE:
             return
         
-        self.get_logger().info(f"Marker callback received for Marker ID: {msg.marker}")
+        # self.get_logger().info(f"Marker callback received for Marker ID: {msg.marker}")
 
         p_base = None
         distance = 0.0
@@ -333,7 +333,7 @@ class VisualServoingNode(Node):
             cmd.angular.z = max(min(-k_ang_z * error_angular_x, 0.70), -0.70)
 
             self.vel_pub.publish(cmd)
-            self.get_logger().info(f"Publishing cmd_vel: linear.x={cmd.linear.x:.3f}, linear.y={cmd.linear.y:.3f}, angular.z={cmd.angular.z:.3f}")
+            # self.get_logger().info(f"Publishing cmd_vel: linear.x={cmd.linear.x:.3f}, linear.y={cmd.linear.y:.3f}, angular.z={cmd.angular.z:.3f}")
         
         except Exception as e:
             self.get_logger().warn(f"TF transform failed: {e}")
@@ -352,7 +352,7 @@ class VisualServoingNode(Node):
         if response is None:
             self.get_logger().error("Marker Touch Service Returned Nothing")
         else:
-            self.get_logger().info(f"Marker {msg.marker.id} Touch: {'Succeeded' if response.success else 'Failed'}")
+            self.get_logger().info(f"Marker Touch: {'Succeeded' if response.success else 'Failed'}")
 
 
 def main(args=None):
