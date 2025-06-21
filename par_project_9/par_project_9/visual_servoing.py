@@ -234,8 +234,8 @@ class VisualServoingNode(Node):
             return
 
         # ─── 2. Compute errors: marker minus pointer ────────────────────
-        error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
-        error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
+        # error_x = p_base.point.x - self.marker_offset['x']   # + → tag in front
+        # error_y = p_base.point.y - self.marker_offset['y']   # + → tag left
 
         # ─── 3. Touch window check ─────────────────────────────────────
         # if abs(error_x) < self.touchedDistanceTolerance and \
@@ -251,14 +251,25 @@ class VisualServoingNode(Node):
         #     self.state = VisualServoingState.IDLE
         #     return
 
-        # Compute Euclidean distance to marker
-        
-        distance = (error_x**2 + error_y**2)**0.5
-        self.get_logger().info(f"Distance to marker: {distance:.2f} m")
 
-        if distance < 0.95:  # 25 cm stopping distance
-            self.get_logger().info("Pointer within 25cm of marker — stopping.")
-            self.vel_pub.publish(Twist())  # hard stop
+        # Compute marker position in base_link frame
+        error_x = p_base.point.x
+        error_y = p_base.point.y
+
+        # Offset: assume pointer is 20cm (0.20 m) in front of base_link
+        pointer_offset_x = 0.25
+        adjusted_error_x = error_x - pointer_offset_x
+
+        # Compute Euclidean distance from pointer tip to marker
+        distance = (adjusted_error_x ** 2 + error_y ** 2) ** 0.5
+
+        # Log current distance
+        self.get_logger().info(f"Distance to marker (from pointer): {distance:.2f} m")
+
+        # Stop if within 25cm
+        if distance <= 0.25:
+            self.get_logger().info("Reached marker (within 25 cm) — stopping.")
+            self.vel_pub.publish(Twist())  # Stop the robot
 
             req = MarkerConfirmation.Request()
             req.marker = msg.marker
