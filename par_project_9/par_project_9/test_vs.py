@@ -77,7 +77,7 @@ class VisualServoingNode(Node):
         self.camera_info = None
 
         # Target stopping point
-        self.target_x = -0.0267
+        self.target_x = -0.0700
         self.target_y = 0.0650
 
         self.get_logger().info("Visual Servoing Node initialized")
