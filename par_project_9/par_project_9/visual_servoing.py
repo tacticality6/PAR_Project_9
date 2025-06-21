@@ -237,7 +237,7 @@ class VisualServoingNode(Node):
 
         # Transform to base_link
         try:
-            tf = self.tf_buffer.lookup_transform('odom', point.header.frame_id, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
+            tf = self.tf_buffer.lookup_transform('base_link', point.header.frame_id, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
             base_point = do_transform_point(point, tf)
             offset = {
                 'x': base_point.point.x,
@@ -264,7 +264,7 @@ class VisualServoingNode(Node):
         # ─── 1. Transform marker position into base_link ────────────────
         try:
             transform = self.tf_buffer.lookup_transform(
-                'odom',
+                'base_link',
                 msg.header.frame_id,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.5)
