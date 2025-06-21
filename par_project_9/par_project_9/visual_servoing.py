@@ -21,7 +21,7 @@ class VisualServoingNode(Node):
         super().__init__("visual_servoing_node")
         #parameters
         self.touchedMarkerServiceName = self.declare_parameter("touched_marker_service_name", "touched_marker").get_parameter_value().string_value
-        self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.05).get_parameter_value().double_value
+        self.touchedDistanceTolerance = self.declare_parameter("touched_distance_tolerance", 0.25).get_parameter_value().double_value
         self.baseVelocity = self.declare_parameter("base_velocity", 0.25).get_parameter_value().double_value
         self.colourImageTopic = self.declare_parameter("colour_image_topic", "/oak/rgb/image_raw/compressed").get_parameter_value().string_value
         self.depthImageTopic = self.declare_parameter("depth_image_topic", "/oak/stereo/image_raw/compressedDepth").get_parameter_value().string_value
