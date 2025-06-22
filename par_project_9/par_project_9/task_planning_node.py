@@ -4,149 +4,948 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.action import ActionClient
+import json
+from enum import Enum
+from typing import Dict, List, Optional, Tuple
+import tf2_ros
+from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
+
+# Standard ROS2 messages
+from std_msgs.msg import String, Int32, Bool
+from geometry_msgs.msg import PoseStamped
+from vision_msgs.msg import Detection2DArray
+
+# Nav2 imports
+from nav2_msgs.action import NavigateToPose
+
+# Custom interfaces
+from par_project_9_interfaces.msg import Package, Packages, Marker, Delivery, Deliveries
+from par_project_9_interfaces.srv import MarkerConfirmation
+
+# Import marker definitions
+try:
+    from .marker_definitions import MARKER_MAP
+except ImportError:
+    print("ERROR: Could not import marker_definitions. Using fallback empty definitions.")
+    MARKER_MAP = {}
+
+
+class RobotState(Enum):
+    """Robot state enumeration for task planning state machine"""
+    IDLE = "idle"
+    EXPLORING = "exploring" 
+    PICKING_UP = "picking_up"
+    NAVIGATING_TO_DELIVERY = "navigating_to_delivery"
+    DELIVERING = "delivering"
+    PLANNING = "planning"
+
+
+class DetectedLocation:
+    """Class to store information about detected pickup/delivery locations"""
+    def __init__(self, marker_id: int, location_type: str, item_id: str, 
+                 position: Optional[Tuple[float, float]] = None):
+        self.marker_id = marker_id
+        self.location_type = location_type  # 'pickup' or 'delivery'
+        self.item_id = item_id
+        self.position = position  # (x, y, z) in map frame
+
+        
+    def update_position(self, x: float, y: float, z: float = 0.0):
+        """Update the position"""
+        self.position = (x, y, z)
 
 
 class TaskPlanningNode(Node):
     def __init__(self, node_name):
         self._node_name = node_name
         super().__init__(node_name)
+        
+        # Quality of Service profiles
         qos_profile = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+        
+        # === PARAMETERS ===
+        self.declare_parameters(
+            namespace='',
+            parameters=[
+                ('navigation_timeout', 30.0),   # Max time to wait for navigation
+                ('pickup_timeout', 15.0),       # Max time to attempt pickup
+                ('delivery_timeout', 15.0),     # Max time to attempt delivery
+                ('decision_frequency', 2.0),    # Hz for main decision loop
+                ('marker_timeout', 10.0),       # Time before considering marker lost
+                ('use_tf_for_positions', True), # Use TF transforms for marker positions
+                ('map_frame', 'map'),           # Map frame for navigation
+                ('base_frame', 'base_link'),    # Robot base frame
+            ]
+        )
 
-        # State variables
-        self.packages_on_board = []  # List of Package objects
-        self.mapped_dropoff_locations = {}  # Dict: location_id -> DropOffLocation
-        self.completed_deliveries = 0
-        self.current_target_location = None
-        self.is_exploring = False
+        # === TF SETUP ===
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.map_frame = self.get_parameter('map_frame').value
+        self.base_frame = self.get_parameter('base_frame').value
 
-        # Publishers
-        # TODO: explore_trigger topic controls exploration behavior
+        # === STATE VARIABLES ===
+        self.current_state = RobotState.IDLE
+        self.state_start_time = self.get_clock().now()
+        
+        # Package and delivery tracking
+        self.packages_on_board: List[Package] = []
+        self.completed_deliveries: List[Delivery] = []
+        self.total_deliveries_completed = 0
+        
+        # Location tracking - maps marker_id to DetectedLocation
+        self.known_locations: Dict[int, DetectedLocation] = {}
+        
+        # Current task tracking
+        self.current_target_marker_id: Optional[int] = None
+        self.current_target_item_id: Optional[str] = None
+        self.current_navigation_goal: Optional[PoseStamped] = None
+        self.current_task_type: Optional[str] = None  # 'pickup' or 'delivery'
+        
+        # Track most recent marker detections for checking marker presence
+        self.detected_markers: set = set()
+
+        
+        # Mission statistics
+        self.mission_start_time = self.get_clock().now()
+        self.exploration_cycles = 0
+        self.failed_pickup_attempts = 0
+        self.failed_delivery_attempts = 0
+        self.successful_pickups = 0
+        self.successful_deliveries = 0
+
+        # === PUBLISHERS ===
+        # Exploration control
         self.explore_trigger_pub = self.create_publisher(
             String, "explore_trigger", qos_profile
         )
+        
+        # Visual servoing control
+        self.target_marker_pub = self.create_publisher(
+            Int32, "target_marker_id", qos_profile
+        )
+        
+        # Navigation status
+        self.navigation_command_pub = self.create_publisher(
+            PoseStamped, "navigation_goal", qos_profile
+        )
+        
+        # Mission status and logging
+        self.mission_status_pub = self.create_publisher(
+            String, "mission_status", qos_profile
+        )
+        
+        # Task planning state for debugging
+        self.state_pub = self.create_publisher(
+            String, "task_planning_state", qos_profile
+        )
 
-        # TODO: more publishers...
-
-        # Subscribers
-        # TODO: packages_on_board topic provides package information
+        # === SUBSCRIBERS ===
+        # Package tracking from delivery tracker
         self.packages_sub = self.create_subscription(
-            String, "packages_on_board", self.packages_callback, 10
+            Packages, "packages_onboard", self.packages_callback, qos_profile
         )
-
-        # TODO: markers_detected topic provides detected marker information
+        
+        # Completed deliveries from delivery tracker
+        self.deliveries_sub = self.create_subscription(
+            Deliveries, "completed_deliveries", self.deliveries_callback, qos_profile
+        )
+        
+        # ArUco marker detections for location mapping
         self.markers_sub = self.create_subscription(
-            String, "markers_detected", self.markers_callback, 10
+            Detection2DArray, "aruco_detections", self.markers_callback, qos_profile
         )
-
-        # TODO: navigation_status topic indicates when navigation is complete
+        
+        # Navigation status updates
         self.nav_status_sub = self.create_subscription(
-            String, "navigation_status", self.navigation_status_callback, 10
+            String, "navigation_status", self.navigation_status_callback, qos_profile
+        )
+        
+        # Touch confirmation from visual servoing
+        self.touch_status_sub = self.create_subscription(
+            Bool, "marker_touched", self.touch_status_callback, qos_profile
+        )
+        
+        # Touch attempt status from visual servoing
+        self.touch_attempt_sub = self.create_subscription(
+            Bool, "touch_attempt_status", self.touch_attempt_callback, qos_profile
         )
 
-        # TODO: more subscribers...
-
-        # Timer for main decision loop
-        self.decision_timer = self.create_timer(1.0, self.main_decision_loop)
-
-        self.get_logger().info(f"Task Planning Node '{node_name}' initialized")
-        # TODO: verify the following topics and their formats
-        self.get_logger().info(
-            "- packages_on_board topic format: JSON with package_id, destination_id, pickup_time"
+        # === SERVICE CLIENTS ===
+        # Service client for confirming marker touches
+        self.marker_confirmation_client = self.create_client(
+            MarkerConfirmation, "touched_marker"
         )
-        self.get_logger().info(
-            "- markers_detected topic format: JSON with marker_id, type, position, destination_id"
-        )
-        self.get_logger().info("- explore_trigger topic: 'start'/'stop' commands")
 
-    def packages_callback(self, msg):
-        """
-        Callback for packages_on_board topic
-        """
-        # TODO: implement this function
-        pass
+        # === ACTION CLIENTS ===
+        # Nav2 action client for navigation
+        self.nav2_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.nav2_goal_handle = None
+        self.nav2_result_future = None
 
-    def markers_callback(self, msg):
-        """
-        Callback for markers_detected topic
-        TODO: Message format is JSON string with marker information
-        Example: {"marker_id": "M001", "type": "pickup", "position": {"x": 1.0, "y": 2.0, "z": 0.0}, "destination_id": "D001"}
-        """
-        # TODO: implement this function
-        pass
+        # === TIMERS ===
+        # Main decision loop timer
+        decision_freq = self.get_parameter('decision_frequency').value
+        self.decision_timer = self.create_timer(1.0 / decision_freq, self.main_decision_loop)
+        
+        # Status reporting timer
+        self.status_timer = self.create_timer(5.0, self.publish_status)
 
-    def navigation_status_callback(self, msg):
-        """
-        Callback for navigation status updates
-        TODO: Message contains 'arrived' when robot reaches target
-        """
-        # TODO: implement this function
-        pass
+        # === INITIALISATION ===
+        self.get_logger().info(f"Task Planning Node '{node_name}' initialised")
+        self.get_logger().info(f"- Decision frequency: {decision_freq} Hz")
+        self.get_logger().info(f"- Available marker definitions: {len(MARKER_MAP)}")
+        self.get_logger().info(f"- Map frame: {self.map_frame}")
+        self.get_logger().info(f"- Base frame: {self.base_frame}")
+        
+        # Log available marker pairs
+        self._log_available_markers()
+        
+        # Start in planning state to assess initial conditions
+        self.transition_to_state(RobotState.PLANNING)
 
-    def main_decision_loop(self):
-        """
-        Main decision loop
-        This runs periodically to make decisions based on current state
-        """
-        # Check if we have parcels
-        if self.has_parcels():
-            # Check if we have mapped drop-off locations
-            if len(self.mapped_dropoff_locations) > 0:
-                # Calculate closest drop-off and navigate there
-                closest_dropoff = self.calculate_closest_dropoff()
-                if closest_dropoff:
-                    self.navigate_to_dropoff(closest_dropoff)
+    def _log_available_markers(self):
+        """Log information about available pickup/delivery marker pairs"""
+        pickup_markers = []
+        delivery_markers = []
+        
+        for marker_id, info in MARKER_MAP.items():
+            if info['type'] == 'pickup':
+                pickup_markers.append((marker_id, info['item_id']))
+            elif info['type'] == 'delivery':
+                delivery_markers.append((marker_id, info['item_id']))
+        
+        self.get_logger().info(f"Available pickup markers: {pickup_markers}")
+        self.get_logger().info(f"Available delivery markers: {delivery_markers}")
+
+    # === CALLBACK METHODS ===
+    
+    def packages_callback(self, msg: Packages):
+        """Handle updates to packages currently on board"""
+        previous_count = len(self.packages_on_board)
+        self.packages_on_board = list(msg.packages)
+        current_count = len(self.packages_on_board)
+        
+        if current_count != previous_count:
+            self.get_logger().info(f"Packages on board updated: {previous_count} -> {current_count}")
+            
+            # Log current packages
+            for pkg in self.packages_on_board:
+                item_name = self._get_item_name_for_destination(pkg.destination_id)
+                self.get_logger().info(f"  - Package {pkg.package_id} for {item_name} (dest: {pkg.destination_id})")
+
+    def deliveries_callback(self, msg: Deliveries):
+        """Handle updates to completed deliveries"""
+        previous_count = len(self.completed_deliveries)
+        self.completed_deliveries = list(msg.deliveries)
+        current_count = len(self.completed_deliveries)
+        
+        if current_count > previous_count:
+            self.total_deliveries_completed = current_count
+            self.successful_deliveries += (current_count - previous_count)
+            new_deliveries = current_count - previous_count
+            self.get_logger().info(f"New deliveries completed! Total: {current_count} (+{new_deliveries})")
+            
+            # Log recent deliveries
+            for delivery in self.completed_deliveries[-new_deliveries:]:
+                item_name = self._get_item_name_for_destination(delivery.destination_id)
+                trip_duration = delivery.trip_time.sec + delivery.trip_time.nanosec / 1e9
+                self.get_logger().info(f"  - Delivered {item_name} in {trip_duration:.1f}s")
+
+    def markers_callback(self, msg: Detection2DArray):
+        """Handle ArUco marker detections to update location map"""
+        
+        # Update list of currently detected markers
+        currently_detected = set()
+        
+        for detection in msg.detections:
+            if not detection.results:
+                continue
+                
+            try:
+                marker_id = int(detection.results[0].hypothesis.class_id)
+                currently_detected.add(marker_id)
+            except ValueError:
+                continue
+            
+            # Only process markers that are in our definition map
+            if marker_id not in MARKER_MAP:
+                continue
+                
+            marker_info = MARKER_MAP[marker_id]
+            location_type = marker_info['type']
+            item_id = marker_info.get('item_id')
+            
+            # Skip non-actionable markers (like home_base)
+            if location_type not in ['pickup', 'delivery']:
+                continue
+            
+            # Get marker position using TF if available
+            position = self._get_marker_position_from_tf(marker_id)
+            if position is None:
+                # Fallback to detection bbox center (camera coordinates)
+                x = detection.bbox.center.position.x
+                y = detection.bbox.center.position.y
+                position = (x, y, 0.0)
+            
+            # Update or create location entry
+            if marker_id in self.known_locations:
+                self.known_locations[marker_id].update_position(*position)
             else:
-                # No mapped locations - start exploring
-                self.start_exploration()
+                self.known_locations[marker_id] = DetectedLocation(
+                    marker_id, location_type, item_id, position
+                )
+                self.get_logger().info(f"New {location_type} location discovered: {item_id} (marker {marker_id}) at {position}")
+        
+        # Update the set of recently detected markers
+        self.detected_markers = currently_detected
+
+    def _get_marker_position_from_tf(self, marker_id: int) -> Optional[Tuple[float, float, float]]:
+        """Get marker position in map frame using TF"""
+        if not self.get_parameter('use_tf_for_positions').value:
+            return None
+            
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                f"aruco_{marker_id}",
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            
+            t = transform.transform.translation
+            return (t.x, t.y, t.z)
+            
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            self.get_logger().debug(f"TF lookup failed for marker {marker_id}: {e}")
+            return None
+
+    def navigation_status_callback(self, msg: String):
+        """Handle navigation status updates"""
+        status = msg.data.lower()
+        
+        if status == "arrived" or status == "goal_reached":
+            self.get_logger().info("Navigation goal reached")
+            self._handle_navigation_success()
+        elif status == "failed" or status == "aborted":
+            self.get_logger().warn("Navigation failed")
+            self._handle_navigation_failure()
+        elif status == "planning" or status == "following_path":
+            # These are normal status updates during navigation
+            pass
+
+    def touch_status_callback(self, msg: Bool):
+        """Handle touch confirmation from visual servoing system"""
+        if msg.data:
+            self.get_logger().info("Marker touch confirmed by visual servoing")
+            self._handle_successful_touch()
         else:
-            # No parcels - start exploring to find pickup markers
-            self.start_exploration()
+            self.get_logger().warn("Marker touch failed")
+            self._handle_failed_touch()
 
-    def has_parcels(self):
-        """Check if robot has any parcels on board"""
-        return len(self.packages_on_board) > 0
+    def touch_attempt_callback(self, msg: Bool):
+        """Handle touch attempt status from visual servoing"""
+        # This provides feedback on ongoing touch attempts
+        if msg.data:
+            self.get_logger().debug("Touch attempt in progress")
+        else:
+            self.get_logger().debug("No active touch attempt")
 
-    def has_parcel_for_location(self, location_id):
-        """Check if robot has a parcel for the specified location"""
-        return any(
-            package.destination_id == location_id for package in self.packages_on_board
-        )
+    # === MAIN DECISION LOOP ===
+    
+    def main_decision_loop(self):
+        """Main decision-making loop that runs the task planning state machine"""
+        current_time = self.get_clock().now()
+        time_in_state = (current_time - self.state_start_time).nanoseconds / 1e9
+        
+        # Check for timeouts in current state
+        if self._check_state_timeout(time_in_state):
+            return
+        
+        # State machine implementation
+        if self.current_state == RobotState.IDLE:
+            self._handle_idle_state()
+        elif self.current_state == RobotState.PLANNING:
+            self._handle_planning_state()
+        elif self.current_state == RobotState.EXPLORING:
+            self._handle_exploring_state(time_in_state)
+        elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
+            self._handle_navigating_to_delivery_state(time_in_state)
+        elif self.current_state == RobotState.DELIVERING:
+            self._handle_delivering_state(time_in_state)
 
-    def calculate_closest_dropoff(self):
-        """Calculate the closest drop-off location that we have a parcel for"""
-        # TODO: Implement this function
-        return None
+    def _check_state_timeout(self, time_in_state: float) -> bool:
+        """Check if current state has timed out and handle accordingly"""
+        timeout_map = {
+            RobotState.NAVIGATING_TO_DELIVERY: self.get_parameter('navigation_timeout').value,
+            RobotState.PICKING_UP: self.get_parameter('pickup_timeout').value,
+            RobotState.DELIVERING: self.get_parameter('delivery_timeout').value,
+        }
+        
+        if self.current_state in timeout_map:
+            timeout = timeout_map[self.current_state]
+            if time_in_state > timeout:
+                self.get_logger().warn(f"State {self.current_state.value} timed out after {time_in_state:.1f}s")
+                self._handle_state_timeout()
+                return True
+        
+        return False
 
-    def navigate_to_dropoff(self, dropoff_location):
-        """Navigate to the specified drop-off location"""
-        # TODO: Implement this function
+    def _handle_state_timeout(self):
+        """Handle timeout conditions for different states"""
+        if self.current_state == RobotState.EXPLORING:
+            self.get_logger().info("Exploration timeout - returning to planning")
+            self.transition_to_state(RobotState.PLANNING)
+        elif self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
+            self.get_logger().info("Navigation timeout - returning to planning")
+            self.transition_to_state(RobotState.PLANNING)
+        elif self.current_state == RobotState.PICKING_UP:
+            self.failed_pickup_attempts += 1
+            self.get_logger().info(f"Pickup timeout - failed attempts: {self.failed_pickup_attempts}")
+            self.transition_to_state(RobotState.PLANNING)
+        elif self.current_state == RobotState.DELIVERING:
+            self.failed_delivery_attempts += 1
+            self.get_logger().info(f"Delivery timeout - failed attempts: {self.failed_delivery_attempts}")
+            self.transition_to_state(RobotState.PLANNING)
+
+    # === STATE HANDLERS ===
+    
+    def _handle_idle_state(self):
+        """Handle idle state - typically transitions immediately to planning"""
+        self.transition_to_state(RobotState.PLANNING)
+
+    def _handle_planning_state(self):
+        """Handle planning state - make decisions about what to do next"""
+        self.get_logger().debug("In planning state - assessing situation")
+        
+        # First priority: deliver packages we already have
+        if self.packages_on_board:
+            delivery_target = self._find_best_delivery_target()
+            if delivery_target:
+                self._initiate_delivery(delivery_target)
+                return
+            else:
+                self.get_logger().info("Have packages but no known delivery locations - exploring")
+                self._initiate_exploration()
+                return
+        
+        # No packages to deliver - start exploring to find new markers
+        self.get_logger().info("No packages on board - exploring for pickup opportunities")
+        self._initiate_exploration()
+        return
+
+    def _handle_exploring_state(self, time_in_state: float):
+        """Handle exploration state"""
+        # Exploration is handled by sending explore_trigger commands
+        # The actual exploration behavior is implemented by other nodes
+        if time_in_state > 5.0:  # Check every 5 seconds if we've found new locations
+            if self._has_actionable_locations():
+                self.get_logger().info("Found actionable locations during exploration")
+                self.stop_exploration()
+                self.transition_to_state(RobotState.PLANNING)
+
+    def _handle_navigating_to_delivery_state(self, time_in_state: float):
+        """Handle navigation to delivery location using Nav2"""
+        # Check if we have an active navigation goal
+        if self.nav2_goal_handle is None:
+            self.get_logger().error("No active Nav2 goal handle in navigation state")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        # Check if we have a result future and if it's done
+        if self.nav2_result_future is not None:
+            if self.nav2_result_future.done():
+                try:
+                    result = self.nav2_result_future.result()
+                    if result is not None:
+                        self._handle_nav2_result(result)
+                    else:
+                        self.get_logger().error("Nav2 result is None")
+                        self.transition_to_state(RobotState.PLANNING)
+                except Exception as e:
+                    self.get_logger().error(f"Error getting Nav2 result: {e}")
+                    self.transition_to_state(RobotState.PLANNING)
+                return
+        
+        # Periodically log navigation progress
+        if int(time_in_state) % 5 == 0 and time_in_state > 0:
+            target_info = ""
+            if self.current_target_marker_id and self.current_target_item_id:
+                target_info = f" to {self.current_target_item_id} (marker {self.current_target_marker_id})"
+            self.get_logger().info(f"Navigation in progress{target_info} - {time_in_state:.1f}s elapsed")
+        
+        # Check if goal is still active
+        if not self.nav2_goal_handle.is_goal_active():
+            self.get_logger().warn("Nav2 goal is no longer active")
+            self.transition_to_state(RobotState.PLANNING)
+
+    def _handle_delivering_state(self, time_in_state: float):
+        """Handle delivery operation state"""
+        # Visual servoing should be active, waiting for touch confirmation
         pass
 
-    def increment_completed_deliveries(self):
-        """Increment the completed deliveries counter"""
-        # TODO: confirm this function
-        self.completed_deliveries += 1
-        self.get_logger().info(f"Completed deliveries: {self.completed_deliveries}")
+    # === NAVIGATION AND ACTION METHODS ===
+    
+    def _handle_navigation_success(self):
+        """Handle successful navigation arrival"""
+        if self.current_state == RobotState.NAVIGATING_TO_DELIVERY:
+            self.get_logger().info("Arrived at delivery location - initiating delivery")
+            self.transition_to_state(RobotState.DELIVERING)
+            self._activate_visual_servoing()
 
-    def start_exploration(self):
-        """Start exploration mode"""
-        # TODO: confirm this function
-        if not self.is_exploring:
-            explore_msg = String()
-            explore_msg.data = "start"
-            self.explore_trigger_pub.publish(explore_msg)
-            self.is_exploring = True
-            self.get_logger().info("Started exploration")
+    def _handle_navigation_failure(self):
+        """Handle navigation failure"""
+        self.get_logger().warn("Navigation failed - returning to planning")
+        # Remove the target location if navigation consistently fails
+        if self.current_target_marker_id and self.current_target_marker_id in self.known_locations:
+            self.get_logger().warn(f"Removing unreachable marker {self.current_target_marker_id} from known locations")
+            del self.known_locations[self.current_target_marker_id]
+        self.transition_to_state(RobotState.PLANNING)
+
+    def _handle_successful_touch(self):
+        """Handle successful marker touch"""
+        if self.current_state == RobotState.PICKING_UP:
+            self.get_logger().info("Pickup touch successful - confirming with delivery tracker")
+            self.successful_pickups += 1
+            self._confirm_pickup()
+        elif self.current_state == RobotState.DELIVERING:
+            self.get_logger().info("Delivery touch successful - confirming with delivery tracker")
+            self.successful_deliveries += 1
+            self._confirm_delivery()
+
+    def _handle_failed_touch(self):
+        """Handle failed marker touch"""
+        self.get_logger().warn("Marker touch failed - checking if marker is still present")
+        
+        # Check if the marker is still visible - if not, remove it from known locations
+        if not self._is_target_marker_currently_detected():
+            self.get_logger().warn(f"Target marker {self.current_target_marker_id} no longer visible - removing from known locations")
+            self._remove_marker_from_known_locations(self.current_target_marker_id)
+        
+        self.transition_to_state(RobotState.PLANNING)
+
+    def _activate_visual_servoing(self):
+        """Activate visual servoing for the current target marker"""
+        if self.current_target_marker_id is not None:
+            target_msg = Int32()
+            target_msg.data = self.current_target_marker_id
+            self.target_marker_pub.publish(target_msg)
+            self.get_logger().info(f"Activated visual servoing for marker {self.current_target_marker_id}")
+
+    def _confirm_pickup(self):
+        """Confirm pickup action with delivery tracking service"""
+        if self.current_target_marker_id is None:
+            self.get_logger().error("Cannot confirm pickup - no target marker set")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        # Create marker message for pickup confirmation
+        marker_msg = Marker()
+        marker_msg.id = self.current_target_marker_id
+        marker_msg.is_pickup = True
+        
+        # Find destination ID from marker definitions
+        if self.current_target_marker_id in MARKER_MAP:
+            item_id = MARKER_MAP[self.current_target_marker_id]['item_id']
+            # Find the corresponding delivery marker for this item
+            dest_marker_id = self._find_delivery_marker_for_item(item_id)
+            if dest_marker_id:
+                marker_msg.dest_id = dest_marker_id
+            else:
+                self.get_logger().error(f"Cannot find delivery marker for item {item_id}")
+                self.transition_to_state(RobotState.PLANNING)
+                return
+        else:
+            self.get_logger().error(f"Marker {self.current_target_marker_id} not in definitions")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        # Call the marker confirmation service
+        self._call_marker_confirmation_service(marker_msg)
+
+    def _confirm_delivery(self):
+        """Confirm delivery action with delivery tracking service"""
+        if self.current_target_marker_id is None:
+            self.get_logger().error("Cannot confirm delivery - no target marker set")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        # Create marker message for delivery confirmation
+        marker_msg = Marker()
+        marker_msg.id = self.current_target_marker_id
+        marker_msg.dest_id = self.current_target_marker_id  # For delivery, dest_id is the marker itself
+        marker_msg.is_pickup = False
+        
+        # Call the marker confirmation service
+        self._call_marker_confirmation_service(marker_msg)
+
+    def _call_marker_confirmation_service(self, marker_msg: Marker):
+        """Call the marker confirmation service"""
+        if not self.marker_confirmation_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().error("Marker confirmation service not available")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        request = MarkerConfirmation.Request()
+        request.marker = marker_msg
+        
+        future = self.marker_confirmation_client.call_async(request)
+        future.add_done_callback(self._marker_confirmation_callback)
+
+    def _marker_confirmation_callback(self, future):
+        """Handle response from marker confirmation service"""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info("Marker confirmation successful")
+                self.transition_to_state(RobotState.PLANNING)
+            else:
+                self.get_logger().warn("Marker confirmation failed")
+                self.transition_to_state(RobotState.PLANNING)
+        except Exception as e:
+            self.get_logger().error(f"Marker confirmation service call failed: {e}")
+            self.transition_to_state(RobotState.PLANNING)
+
+    # === LOCATION FINDING AND TARGETING ===
+    
+    def _find_best_delivery_target(self) -> Optional[int]:
+        """Find the best delivery location for packages we're carrying"""
+        if not self.packages_on_board:
+            return None
+        
+        # Get all destination IDs we need to deliver to
+        needed_destinations = set()
+        for package in self.packages_on_board:
+            needed_destinations.add(package.destination_id)
+        
+        # Find delivery markers we know about that match our packages
+        available_deliveries = []
+        for marker_id, location in self.known_locations.items():
+            if (location.location_type == 'delivery' and 
+                marker_id in needed_destinations):
+                available_deliveries.append(marker_id)
+        
+        if not available_deliveries:
+            return None
+        
+        # Implement distance-based prioritization
+        return self._select_closest_delivery_target(available_deliveries)
+
+    def _has_actionable_locations(self) -> bool:
+        """Check if we have any actionable locations (needed deliveries)"""
+        # Check for deliveries if we have packages
+        if self.packages_on_board:
+            needed_destinations = {pkg.destination_id for pkg in self.packages_on_board}
+            for marker_id, location in self.known_locations.items():
+                if (location.location_type == 'delivery' and 
+                    marker_id in needed_destinations):
+                    return True
+        
+        return False
+
+    def _initiate_delivery(self, marker_id: int):
+        """Initiate delivery sequence for the specified marker"""
+        self.current_target_marker_id = marker_id
+        self.current_task_type = 'delivery'
+        
+        if marker_id in MARKER_MAP:
+            item_id = MARKER_MAP[marker_id]['item_id']
+            self.current_target_item_id = item_id
+            self.get_logger().info(f"Initiating delivery of {item_id} at marker {marker_id}")
+        
+        # Send navigation goal
+        if marker_id in self.known_locations:
+            location = self.known_locations[marker_id]
+            if location.position:
+                self._send_navigation_goal(location.position[0], location.position[1])
+                self.transition_to_state(RobotState.NAVIGATING_TO_DELIVERY)
+            else:
+                self.get_logger().error(f"No position available for marker {marker_id}")
+                self.transition_to_state(RobotState.PLANNING)
+        else:
+            self.get_logger().error(f"Marker {marker_id} not in known locations")
+            self.transition_to_state(RobotState.PLANNING)
+
+    def _initiate_exploration(self):
+        """Start exploration mode to find new markers"""
+        self.exploration_cycles += 1
+        self.get_logger().info(f"Starting exploration cycle {self.exploration_cycles}")
+        
+        explore_msg = String()
+        explore_msg.data = "start"
+        self.explore_trigger_pub.publish(explore_msg)
+        
+        self.transition_to_state(RobotState.EXPLORING)
 
     def stop_exploration(self):
         """Stop exploration mode"""
-        # TODO: confirm this function
-        if self.is_exploring:
-            explore_msg = String()
-            explore_msg.data = "stop"
-            self.explore_trigger_pub.publish(explore_msg)
-            self.is_exploring = False
-            self.get_logger().info("Stopped exploration")
+        explore_msg = String()
+        explore_msg.data = "stop"
+        self.explore_trigger_pub.publish(explore_msg)
+        self.get_logger().info("Stopped exploration")
+
+    def _send_navigation_goal(self, x: float, y: float):
+        """Send a navigation goal using Nav2 action client"""
+        # Wait for Nav2 action server to be available
+        if not self.nav2_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Nav2 action server not available")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+        
+        # Create Nav2 goal message
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = self.map_frame
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = x
+        goal_msg.pose.pose.position.y = y
+        goal_msg.pose.pose.position.z = 0.0
+        goal_msg.pose.pose.orientation.w = 1.0  # Default orientation
+        
+        # Store current navigation goal for reference
+        self.current_navigation_goal = goal_msg.pose
+        
+        # Send the goal
+        self.get_logger().info(f"Sending Nav2 navigation goal: ({x:.2f}, {y:.2f}) in {self.map_frame}")
+        send_goal_future = self.nav2_client.send_goal_async(goal_msg, feedback_callback=self._nav2_feedback_callback)
+        send_goal_future.add_done_callback(self._nav2_goal_response_callback)
+
+    # === NAV2 CALLBACK METHODS ===
+    
+    def _nav2_goal_response_callback(self, future):
+        """Handle Nav2 goal response"""
+        try:
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self.get_logger().error("Nav2 goal rejected")
+                self.transition_to_state(RobotState.PLANNING)
+                return
+            
+            self.get_logger().info("Nav2 goal accepted")
+            self.nav2_goal_handle = goal_handle
+            
+            # Get result future
+            self.nav2_result_future = goal_handle.get_result_async()
+            
+        except Exception as e:
+            self.get_logger().error(f"Exception in Nav2 goal response: {e}")
+            self.transition_to_state(RobotState.PLANNING)
+    
+    def _nav2_feedback_callback(self, feedback_msg):
+        """Handle Nav2 navigation feedback"""
+        feedback = feedback_msg.feedback
+        
+        # Log progress periodically (every few feedback messages)
+        if hasattr(self, '_feedback_counter'):
+            self._feedback_counter += 1
+        else:
+            self._feedback_counter = 0
+            
+        if self._feedback_counter % 20 == 0:  # Log every 20th feedback message
+            current_pose = feedback.current_pose.pose
+            distance_remaining = feedback.distance_remaining
+            self.get_logger().debug(
+                f"Nav2 feedback - Position: ({current_pose.position.x:.2f}, {current_pose.position.y:.2f}), "
+                f"Distance remaining: {distance_remaining:.2f}m"
+            )
+    
+    def _handle_nav2_result(self, result):
+        """Handle Nav2 navigation result"""
+        if result.result is None:
+            self.get_logger().error("Nav2 result is None")
+            self.transition_to_state(RobotState.PLANNING)
+            return
+            
+        # Check the result status
+        from nav2_msgs.action import NavigateToPose
+        
+        if result.result == NavigateToPose.Result.SUCCEEDED:
+            self.get_logger().info("Nav2 navigation succeeded")
+            self._handle_navigation_success()
+        elif result.result == NavigateToPose.Result.CANCELED:
+            self.get_logger().warn("Nav2 navigation was canceled")
+            self.transition_to_state(RobotState.PLANNING)
+        elif result.result == NavigateToPose.Result.FAILED:
+            self.get_logger().warn("Nav2 navigation failed")
+            self._handle_navigation_failure()
+        else:
+            self.get_logger().warn(f"Nav2 navigation completed with unknown result: {result.result}")
+            self.transition_to_state(RobotState.PLANNING)
+        
+        # Clean up Nav2 handles
+        self.nav2_goal_handle = None
+        self.nav2_result_future = None
+    
+    def _nav2_cancel_callback(self, future):
+        """Handle Nav2 goal cancellation response"""
+        try:
+            cancel_response = future.result()
+            if cancel_response.return_code == cancel_response.ERROR_NONE:
+                self.get_logger().info("Nav2 goal successfully canceled")
+            else:
+                self.get_logger().warn(f"Nav2 goal cancellation failed with code: {cancel_response.return_code}")
+        except Exception as e:
+            self.get_logger().error(f"Exception in Nav2 cancel callback: {e}")
+
+    # === UTILITY METHODS ===
+    
+    def _get_robot_position(self) -> Optional[Tuple[float, float]]:
+        """Get the current robot position in the map frame"""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                self.base_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            
+            t = transform.transform.translation
+            return (t.x, t.y)
+            
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            self.get_logger().debug(f"Failed to get robot position: {e}")
+            return None
+    
+    def _calculate_distance(self, pos1: Tuple[float, float], pos2: Tuple[float, float]) -> float:
+        """Calculate Euclidean distance between two 2D positions"""
+        return ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)**0.5
+    
+    def _select_closest_delivery_target(self, available_deliveries: List[int]) -> int:
+        """Select the closest delivery target from available options"""
+        if len(available_deliveries) == 1:
+            return available_deliveries[0]
+        
+        robot_pos = self._get_robot_position()
+        if robot_pos is None:
+            self.get_logger().warn("Cannot get robot position for distance calculation, using first available delivery")
+            return available_deliveries[0]
+        
+        closest_marker = None
+        min_distance = float('inf')
+        
+        for marker_id in available_deliveries:
+            if marker_id not in self.known_locations:
+                continue
+                
+            location = self.known_locations[marker_id]
+            if location.position is None:
+                continue
+            
+            # Calculate distance to this delivery location
+            delivery_pos = (location.position[0], location.position[1])
+            distance = self._calculate_distance(robot_pos, delivery_pos)
+            
+            if distance < min_distance:
+                min_distance = distance
+                closest_marker = marker_id
+        
+        if closest_marker is not None:
+            item_name = self._get_item_name_for_destination(closest_marker)
+            self.get_logger().info(f"Selected closest delivery target: {item_name} (marker {closest_marker}) at distance {min_distance:.2f}m")
+            return closest_marker
+        else:
+            self.get_logger().warn("No delivery targets with valid positions, using first available")
+            return available_deliveries[0]
+    
+    def _get_item_name_for_destination(self, destination_id: int) -> str:
+        """Get the item name for a given destination marker ID"""
+        if destination_id in MARKER_MAP:
+            item_id = MARKER_MAP[destination_id].get('item_id', 'unknown')
+            return item_id or f"marker_{destination_id}"
+        return f"unknown_dest_{destination_id}"
+
+    def _find_delivery_marker_for_item(self, item_id: str) -> Optional[int]:
+        """Find the delivery marker ID for a given item ID"""
+        for marker_id, info in MARKER_MAP.items():
+            if (info['type'] == 'delivery' and 
+                info.get('item_id') == item_id):
+                return marker_id
+        return None
+
+    def _is_target_marker_currently_detected(self) -> bool:
+        """Check if the current target marker is in the most recent detections"""
+        if self.current_target_marker_id is None:
+            return False
+        
+        return self.current_target_marker_id in self.detected_markers
+
+    def _remove_marker_from_known_locations(self, marker_id: int):
+        """Remove a marker from known locations"""
+        if marker_id in self.known_locations:
+            location = self.known_locations[marker_id]
+            item_name = location.item_id or f"marker_{marker_id}"
+            self.get_logger().info(f"Removing {location.location_type} location for {item_name} (marker {marker_id})")
+            del self.known_locations[marker_id]
+        else:
+            self.get_logger().warn(f"Attempted to remove marker {marker_id} but it's not in known locations")
+
+    def transition_to_state(self, new_state: RobotState):
+        """Transition to a new state with logging and cleanup"""
+        if new_state == self.current_state:
+            return
+        
+        old_state = self.current_state
+        self.current_state = new_state
+        self.state_start_time = self.get_clock().now()
+        
+        self.get_logger().info(f"State transition: {old_state.value} -> {new_state.value}")
+        
+        # Publish state change for debugging
+        state_msg = String()
+        state_msg.data = new_state.value
+        self.state_pub.publish(state_msg)
+        
+        # State-specific cleanup and initialization
+        if new_state == RobotState.PLANNING:
+            # Clear current targets when returning to planning
+            self.current_target_marker_id = None
+            self.current_target_item_id = None
+            self.current_navigation_goal = None
+            self.current_task_type = None
+            
+        # Cancel active Nav2 goal if transitioning away from navigation
+        if (old_state == RobotState.NAVIGATING_TO_DELIVERY and 
+            new_state != RobotState.NAVIGATING_TO_DELIVERY and
+            self.nav2_goal_handle is not None):
+            self.get_logger().info("Canceling active Nav2 goal due to state transition")
+            cancel_future = self.nav2_goal_handle.cancel_goal_async()
+            cancel_future.add_done_callback(self._nav2_cancel_callback)
+            self.nav2_goal_handle = None
+            self.nav2_result_future = None
+
+    def publish_status(self):
+        """Publish periodic status updates"""
+        current_time = self.get_clock().now()
+        mission_duration = (current_time - self.mission_start_time).nanoseconds / 1e9
+        
+        status = {
+            "mission_time": f"{mission_duration:.1f}s",
+            "state": self.current_state.value,
+            "packages_onboard": len(self.packages_on_board),
+            "total_deliveries": self.total_deliveries_completed,
+            "known_locations": len(self.known_locations),
+            "exploration_cycles": self.exploration_cycles,
+            "failed_pickups": self.failed_pickup_attempts,
+            "failed_deliveries": self.failed_delivery_attempts,
+            "successful_pickups": self.successful_pickups,
+            "successful_deliveries": self.successful_deliveries,
+            "current_target": self.current_target_marker_id,
+            "current_task": self.current_task_type,
+        }
+        
+        status_msg = String()
+        status_msg.data = json.dumps(status)
+        self.mission_status_pub.publish(status_msg)
+        
+        # Log periodic status
+        self.get_logger().info(
+            f"Mission Status: {mission_duration:.1f}s | "
+            f"State: {self.current_state.value} | "
+            f"Packages: {len(self.packages_on_board)} | "
+            f"Deliveries: {self.total_deliveries_completed} | "
+            f"Locations: {len(self.known_locations)} | "
+            f"Target: {self.current_target_marker_id} ({self.current_task_type})"
+        )
 
 
 def main(args=None):
